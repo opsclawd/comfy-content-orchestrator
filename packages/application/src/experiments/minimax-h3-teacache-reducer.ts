@@ -3,7 +3,8 @@ import {
   type MinimaxH3TeaCacheObservation,
   type MinimaxH3TeaCacheRequest,
   type MinimaxH3TeaCacheConfig,
-  type MinimaxH3TeaCacheMode
+  type MinimaxH3TeaCacheMode,
+  TEACACHE_SUPPORTED_THRESHOLDS
 } from "@cco/contracts";
 
 export interface ReduceTeaCacheObservationOptions {
@@ -251,11 +252,28 @@ export function reduceTeaCacheObservation(
         );
         if (meta.effectiveConfig && typeof meta.effectiveConfig === "object") {
           const ec = meta.effectiveConfig as Record<string, unknown>;
+          // Beyond "is a number", each field must satisfy the contract's
+          // own runtime invariants: steps must be INTEGERS (a fractional
+          // step like 2.5 is not a valid step index and silently sailed
+          // through here before), relL1Thresh must be one of the
+          // supported allowlisted values, and mode must be one of the
+          // two real enum values -- a prior version accepted any of these
+          // malformed and constructed an observedEffectiveConfig that
+          // later crashed MinimaxH3TeaCacheObservationSchema.safeParse
+          // downstream (in reconcileExperiment) instead of this reducer
+          // failing cleanly up front.
+          const validMode = ec.mode === "raw-l1-v1" || ec.mode === "off" || ec.mode === undefined;
           if (
             typeof ec.relL1Thresh === "number" &&
+            (TEACACHE_SUPPORTED_THRESHOLDS as readonly number[]).includes(
+              Math.round(ec.relL1Thresh * 10000) / 10000
+            ) &&
             typeof ec.startStep === "number" &&
+            Number.isInteger(ec.startStep) &&
             typeof ec.endStep === "number" &&
-            typeof ec.totalSteps === "number"
+            Number.isInteger(ec.endStep) &&
+            typeof ec.totalSteps === "number" &&
+            validMode
           ) {
             // The contract type only permits totalSteps === 20 (mirroring
             // the hard runtime invariant), so a genuinely-different reported
@@ -321,6 +339,10 @@ export function reduceTeaCacheObservation(
                 };
               }
             }
+          } else {
+            failureReasons.push(
+              `Observed effectiveConfig reported a malformed field: relL1Thresh=${String(ec.relL1Thresh)} (must be one of [${TEACACHE_SUPPORTED_THRESHOLDS.join(", ")}]), startStep=${String(ec.startStep)}/endStep=${String(ec.endStep)} (must be integers), mode=${String(ec.mode)} (must be "raw-l1-v1" or "off" if present).`
+            );
           }
         }
         // Deliberately no further fallback here: an older, non-standard

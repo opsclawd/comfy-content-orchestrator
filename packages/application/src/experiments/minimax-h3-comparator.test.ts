@@ -5138,6 +5138,131 @@ describe("Service-generated Matched Pairs Admission and Comparison", () => {
       ).toBe(true);
     });
 
+    it("disqualifies speedup metrics when effectiveConfig reports a negative startStep whose generic derivation coincidentally agrees with its own reported normalizedStartStep (issue #467 adversarial probe)", async () => {
+      // startStep=-18 derives to totalSteps(20)+(-18)=2 under the SAME
+      // generic negative-offset derivation endStep legitimately uses --
+      // but startStep itself must never be negative at all, regardless
+      // of whether that derivation happens to agree with the reported
+      // normalizedStartStep=2. A prior version applied the same
+      // deriveNormalized() helper to both fields and so missed this.
+      const service = setupServiceWithTemplates();
+      const prompt = "A cinematic shot of a sunset over the ocean";
+
+      const { descriptor: baseDesc } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt,
+        operatorLabel: "operator",
+        runId: "tc-negative-startstep-base",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        teacacheMatchedControl: true,
+        inputManifestPath: "manifest-i2v.json"
+      });
+
+      const { descriptor: varDesc } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt,
+        operatorLabel: "operator",
+        runId: "tc-negative-startstep-var",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        teacache: "raw-l1-v1",
+        teacacheThreshold: 0.15,
+        teacacheStartStep: 2,
+        teacacheEndStep: -2,
+        teacacheTotalSteps: 20,
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest-i2v.json"
+      });
+
+      const baseResult = createCompletedResultV2(baseDesc as MinimaxH3ExperimentDescriptorV2, {
+        teacacheObservation: {
+          status: "verified",
+          mode: "off",
+          requestedConfig: null,
+          effectiveConfig: null,
+          totalSteps: 20,
+          forwardCallsRecorded: 20,
+          cacheHitsRecorded: 0,
+          nestedForwardsOnHits: 0,
+          coverage: {
+            samplingCallsRecorded: 1,
+            modelForwardsRecorded: 20,
+            complete: true
+          },
+          timings: {
+            samplingWallMs: 380000,
+            modelForwardElapsedMs: 350000,
+            decisionOverheadMs: 0,
+            timingUnavailableReason: null
+          },
+          failureReason: null
+        }
+      });
+
+      const varResult = createCompletedResultV2(varDesc as MinimaxH3ExperimentDescriptorV2, {
+        teacacheObservation: {
+          status: "verified",
+          mode: "raw-l1-v1",
+          requestedConfig: {
+            mode: "raw-l1-v1",
+            relL1Thresh: 0.15,
+            startStep: 2,
+            endStep: -2,
+            totalSteps: 20,
+            normalizedStartStep: 2,
+            normalizedEndStep: 18
+          },
+          effectiveConfig: {
+            mode: "raw-l1-v1",
+            relL1Thresh: 0.15,
+            startStep: -18,
+            endStep: -2,
+            totalSteps: 20,
+            normalizedStartStep: 2,
+            normalizedEndStep: 18
+          },
+          totalSteps: 20,
+          forwardCallsRecorded: 14,
+          cacheHitsRecorded: 6,
+          nestedForwardsOnHits: 0,
+          coverage: {
+            samplingCallsRecorded: 1,
+            modelForwardsRecorded: 14,
+            complete: true
+          },
+          timings: {
+            samplingWallMs: 240000,
+            modelForwardElapsedMs: 220000,
+            decisionOverheadMs: 15,
+            timingUnavailableReason: null
+          },
+          failureReason: null
+        }
+      });
+
+      const report = compareMinimaxH3Experiments({
+        baselineDescriptor: baseDesc,
+        baselineResult: baseResult,
+        variantDescriptor: varDesc,
+        variantResult: varResult
+      });
+
+      expect(report.metricEligibility.samplingWallEligible).toBe(false);
+      expect(report.metricEligibility.reasons.some((r) => r.includes("non-negative integer"))).toBe(
+        true
+      );
+    });
+
     it("admits authentic producer-shaped control and candidate pair through reducer, schema, and comparator", async () => {
       const service = setupServiceWithTemplates();
       const prompt = "A cinematic shot of a sunset over the ocean";

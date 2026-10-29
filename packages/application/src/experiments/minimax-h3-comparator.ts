@@ -394,50 +394,122 @@ function evaluateTeaCacheObservationEligibility(params: {
       // so an object whose OWN reported raw/normalized pair is internally
       // inconsistent must still be caught here regardless of which side
       // it appears on.
-      const deriveNormalized = (raw: number, totalSteps: number): number =>
+      // Only endStep uses the negative-offset-from-end convention --
+      // startStep (per MinimaxH3TeaCacheConfigSchema) must always be a
+      // non-negative integer. Deriving startStep the same way as endStep
+      // let a negative startStep (e.g. -18) that happens to derive to an
+      // in-bounds value coincidentally agree with its own reported
+      // normalizedStartStep and pass unnoticed.
+      const deriveNormalizedEnd = (raw: number, totalSteps: number): number =>
         raw < 0 ? totalSteps + raw : raw;
-      const obsDerivedStartStep = deriveNormalized(
-        obs.effectiveConfig.startStep,
-        obs.effectiveConfig.totalSteps
-      );
-      const obsDerivedEndStep = deriveNormalized(
-        obs.effectiveConfig.endStep,
-        obs.effectiveConfig.totalSteps
-      );
-      const expectedDerivedStartStep = deriveNormalized(
-        expectedRequest.startStep,
-        expectedRequest.totalSteps
-      );
-      const expectedDerivedEndStep = deriveNormalized(
-        expectedRequest.endStep,
-        expectedRequest.totalSteps
-      );
-      if (obs.effectiveConfig.normalizedStartStep !== obsDerivedStartStep) {
+      const isValidRawStartStep = (raw: number): boolean => Number.isInteger(raw) && raw >= 0;
+      const isValidRawEndStep = (raw: number): boolean => Number.isInteger(raw);
+      if (!isValidRawStartStep(obs.effectiveConfig.startStep)) {
+        reasons.push(
+          `${role} observed effectiveConfig startStep ${obs.effectiveConfig.startStep} must be a non-negative integer (only endStep may use the negative-offset-from-end convention).`
+        );
+      }
+      if (!isValidRawStartStep(expectedRequest.startStep)) {
+        reasons.push(
+          `${role} expected request startStep ${expectedRequest.startStep} must be a non-negative integer (only endStep may use the negative-offset-from-end convention).`
+        );
+      }
+      if (
+        !isValidRawEndStep(obs.effectiveConfig.endStep) ||
+        !isValidRawEndStep(expectedRequest.endStep)
+      ) {
+        reasons.push(
+          `${role} observed effectiveConfig endStep ${obs.effectiveConfig.endStep} or expected request endStep ${expectedRequest.endStep} is not an integer.`
+        );
+      }
+      const obsDerivedStartStep = isValidRawStartStep(obs.effectiveConfig.startStep)
+        ? obs.effectiveConfig.startStep
+        : NaN;
+      const obsDerivedEndStep = isValidRawEndStep(obs.effectiveConfig.endStep)
+        ? deriveNormalizedEnd(obs.effectiveConfig.endStep, obs.effectiveConfig.totalSteps)
+        : NaN;
+      const expectedDerivedStartStep = isValidRawStartStep(expectedRequest.startStep)
+        ? expectedRequest.startStep
+        : NaN;
+      const expectedDerivedEndStep = isValidRawEndStep(expectedRequest.endStep)
+        ? deriveNormalizedEnd(expectedRequest.endStep, expectedRequest.totalSteps)
+        : NaN;
+      if (
+        Number.isFinite(obsDerivedStartStep) &&
+        obs.effectiveConfig.normalizedStartStep !== obsDerivedStartStep
+      ) {
         reasons.push(
           `${role} observed effectiveConfig reports an internally inconsistent raw/normalized startStep: startStep=${obs.effectiveConfig.startStep} (totalSteps=${obs.effectiveConfig.totalSteps}) derives to ${obsDerivedStartStep}, but normalizedStartStep=${obs.effectiveConfig.normalizedStartStep} was reported.`
         );
       }
-      if (obs.effectiveConfig.normalizedEndStep !== obsDerivedEndStep) {
+      if (
+        Number.isFinite(obsDerivedEndStep) &&
+        obs.effectiveConfig.normalizedEndStep !== obsDerivedEndStep
+      ) {
         reasons.push(
           `${role} observed effectiveConfig reports an internally inconsistent raw/normalized endStep: endStep=${obs.effectiveConfig.endStep} (totalSteps=${obs.effectiveConfig.totalSteps}) derives to ${obsDerivedEndStep}, but normalizedEndStep=${obs.effectiveConfig.normalizedEndStep} was reported.`
         );
       }
-      if (expectedRequest.normalizedStartStep !== expectedDerivedStartStep) {
+      if (
+        Number.isFinite(expectedDerivedStartStep) &&
+        expectedRequest.normalizedStartStep !== expectedDerivedStartStep
+      ) {
         reasons.push(
           `${role} expected request reports an internally inconsistent raw/normalized startStep: startStep=${expectedRequest.startStep} (totalSteps=${expectedRequest.totalSteps}) derives to ${expectedDerivedStartStep}, but normalizedStartStep=${expectedRequest.normalizedStartStep} was reported.`
         );
       }
-      if (expectedRequest.normalizedEndStep !== expectedDerivedEndStep) {
+      if (
+        Number.isFinite(expectedDerivedEndStep) &&
+        expectedRequest.normalizedEndStep !== expectedDerivedEndStep
+      ) {
         reasons.push(
           `${role} expected request reports an internally inconsistent raw/normalized endStep: endStep=${expectedRequest.endStep} (totalSteps=${expectedRequest.totalSteps}) derives to ${expectedDerivedEndStep}, but normalizedEndStep=${expectedRequest.normalizedEndStep} was reported.`
         );
       }
-      if (obsDerivedStartStep !== expectedDerivedStartStep) {
+      const obsWindowInBounds =
+        Number.isFinite(obsDerivedStartStep) &&
+        Number.isFinite(obsDerivedEndStep) &&
+        obsDerivedStartStep >= 2 &&
+        obsDerivedStartStep < obsDerivedEndStep &&
+        obsDerivedEndStep <= 18;
+      if (
+        Number.isFinite(obsDerivedStartStep) &&
+        Number.isFinite(obsDerivedEndStep) &&
+        !obsWindowInBounds
+      ) {
+        reasons.push(
+          `${role} observed effectiveConfig resolved window [${obsDerivedStartStep}, ${obsDerivedEndStep}) must satisfy 2 <= start < end <= 18.`
+        );
+      }
+      const expectedWindowInBounds =
+        Number.isFinite(expectedDerivedStartStep) &&
+        Number.isFinite(expectedDerivedEndStep) &&
+        expectedDerivedStartStep >= 2 &&
+        expectedDerivedStartStep < expectedDerivedEndStep &&
+        expectedDerivedEndStep <= 18;
+      if (
+        Number.isFinite(expectedDerivedStartStep) &&
+        Number.isFinite(expectedDerivedEndStep) &&
+        !expectedWindowInBounds
+      ) {
+        reasons.push(
+          `${role} expected request resolved window [${expectedDerivedStartStep}, ${expectedDerivedEndStep}) must satisfy 2 <= start < end <= 18.`
+        );
+      }
+      if (
+        Number.isFinite(obsDerivedStartStep) &&
+        Number.isFinite(expectedDerivedStartStep) &&
+        obsDerivedStartStep !== expectedDerivedStartStep
+      ) {
         reasons.push(
           `${role} observed effectiveConfig startStep ${obs.effectiveConfig.startStep} (normalized ${obsDerivedStartStep}) !== expected ${expectedRequest.startStep} (normalized ${expectedDerivedStartStep}).`
         );
       }
-      if (obsDerivedEndStep !== expectedDerivedEndStep) {
+      if (
+        Number.isFinite(obsDerivedEndStep) &&
+        Number.isFinite(expectedDerivedEndStep) &&
+        obsDerivedEndStep !== expectedDerivedEndStep
+      ) {
         reasons.push(
           `${role} observed effectiveConfig endStep ${obs.effectiveConfig.endStep} (normalized ${obsDerivedEndStep}) !== expected ${expectedRequest.endStep} (normalized ${expectedDerivedEndStep}).`
         );

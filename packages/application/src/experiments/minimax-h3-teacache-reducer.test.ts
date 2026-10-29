@@ -496,6 +496,69 @@ describe("minimax-h3-teacache-reducer", () => {
     expect(obs?.effectiveConfig).toBeNull();
   });
 
+  it("rejects an observed effectiveConfig with a fractional relL1Thresh and non-integer startStep/endStep instead of constructing a schema-invalid observation (issue #467 adversarial probe)", () => {
+    const controlRequest: MinimaxH3TeaCacheRequest = {
+      ...sampleRequest,
+      mode: "off",
+      patchNode: null
+    };
+    const events: MinimaxH3InstrumentationEvent[] = [
+      makeEvent("sampling", "span_start"),
+      makeEvent("sampling", "point_event", {
+        teacacheEvent: "session_init",
+        adapterIdentity: { verified: true, observedDigest: controlRequest.adapterDigest },
+        // relL1Thresh=0 is not one of the allowlisted thresholds, and
+        // startStep=2.5/endStep=17.5 are not valid integer step indices
+        // -- both must be rejected outright rather than constructing an
+        // observedEffectiveConfig that MinimaxH3TeaCacheObservationSchema
+        // .safeParse later rejects (crashing reconcileExperiment with an
+        // unhandled ZodError instead of this reducer failing cleanly).
+        effectiveConfig: {
+          mode: "off",
+          relL1Thresh: 0,
+          startStep: 2.5,
+          endStep: 17.5,
+          totalSteps: 20,
+          normalizedStartStep: 2.5,
+          normalizedEndStep: 17.5
+        }
+      })
+    ];
+    for (let s = 0; s < 20; s++) {
+      events.push(
+        makeEvent("sampling", "point_event", {
+          parentSpanId: "span-1",
+          teacacheEvent: "cache_miss",
+          stepIndex: s
+        })
+      );
+    }
+    events.push(
+      makeEvent("sampling", "point_event", {
+        teacacheSession: "end",
+        summary: { mode: "off", forwardCalls: 20, cacheHits: 0 },
+        teacacheSummary: {
+          status: "verified",
+          forwardCallsRecorded: 20,
+          cacheHitsRecorded: 0,
+          modelForwardsRecorded: 20,
+          nestedForwardsOnHits: 0
+        }
+      })
+    );
+    events.push(makeEvent("sampling", "span_end", { completedSteps: 20 }));
+
+    const obs = reduceTeaCacheObservation({
+      events,
+      teacacheRequest: controlRequest,
+      expectedRunId: "run-1"
+    });
+
+    expect(obs?.status).toBe("failed");
+    expect(obs?.failureReason).toMatch(/malformed field/i);
+    expect(obs?.effectiveConfig).toBeNull();
+  });
+
   it("does not flag an effectiveConfig window mismatch when the observed endStep is merely an equivalent absolute spelling of the requested relative endStep (issue #467 adversarial probe)", () => {
     // sampleRequest below requests endStep=-2 (normalizedEndStep=18).
     // Reporting endStep=18 (non-negative, so its own normalization is
