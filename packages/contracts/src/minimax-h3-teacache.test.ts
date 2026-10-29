@@ -196,6 +196,75 @@ describe("MiniMax-H3 TeaCache Contracts", () => {
       expect(parsed.patchNode?.nodeId).toBe("401");
       expect(parsed.patchNode?.classType).toBe("CCOMiniMaxH3TeaCache");
     });
+
+    const baseValidRequest: MinimaxH3TeaCacheRequest = {
+      mode: "raw-l1-v1",
+      relL1Thresh: 0.15,
+      startStep: 2,
+      endStep: -2,
+      totalSteps: 20,
+      normalizedStartStep: 2,
+      normalizedEndStep: 18,
+      upstreamCommit: TEACACHE_UPSTREAM_COMMIT,
+      adapterVersion: TEACACHE_ADAPTER_VERSION,
+      adapterDigest: "a".repeat(64),
+      catalogDigest: "b".repeat(64),
+      topologyDigest: "c".repeat(64),
+      patchNode: null
+    };
+
+    // Each case here reproduces one of the exact adversarial read-only
+    // safeParse probes cited by the issue #467 follow-up review against
+    // the real schema (not a mock), confirming it is rejected rather than
+    // silently accepted as a schema-valid-but-internally-contradictory
+    // object.
+    it("rejects a request whose endStep does not resolve to its own reported normalizedEndStep (issue #467 adversarial probe)", () => {
+      expect(() =>
+        MinimaxH3TeaCacheRequestSchema.parse({
+          ...baseValidRequest,
+          startStep: 2,
+          endStep: 10,
+          normalizedStartStep: 2,
+          normalizedEndStep: 18
+        })
+      ).toThrow(/normalizedEndStep/);
+    });
+
+    it("rejects a request whose startStep is already non-negative but is reported with a different normalizedStartStep (issue #467 adversarial probe)", () => {
+      expect(() =>
+        MinimaxH3TeaCacheRequestSchema.parse({
+          ...baseValidRequest,
+          startStep: 0,
+          endStep: -2,
+          normalizedStartStep: 2,
+          normalizedEndStep: 18
+        })
+      ).toThrow(/normalizedStartStep/);
+    });
+
+    it("rejects a request whose resolved window is inverted (start after end), even when self-reported normalized fields agree with the raw fields (issue #467 adversarial probe)", () => {
+      expect(() =>
+        MinimaxH3TeaCacheRequestSchema.parse({
+          ...baseValidRequest,
+          startStep: 15,
+          endStep: 5,
+          normalizedStartStep: 15,
+          normalizedEndStep: 5
+        })
+      ).toThrow(/2 <= start < end <= 18/);
+    });
+
+    it("accepts a request whose endStep is the equivalent absolute spelling of the relative convention (issue #467 adversarial probe)", () => {
+      const parsed = MinimaxH3TeaCacheRequestSchema.parse({
+        ...baseValidRequest,
+        startStep: 2,
+        endStep: 18,
+        normalizedStartStep: 2,
+        normalizedEndStep: 18
+      });
+      expect(parsed.endStep).toBe(18);
+      expect(parsed.normalizedEndStep).toBe(18);
+    });
   });
 
   describe("MinimaxH3TeaCacheObservationSchema", () => {

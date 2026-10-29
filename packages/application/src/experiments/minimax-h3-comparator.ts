@@ -375,42 +375,71 @@ function evaluateTeaCacheObservationEligibility(params: {
           `${role} observed effectiveConfig threshold ${obs.effectiveConfig.relL1Thresh} !== expected ${expectedRequest.relL1Thresh}.`
         );
       }
-      if (obs.effectiveConfig.startStep !== expectedRequest.startStep) {
+      // Compare the NORMALIZED window only, not the raw startStep/endStep
+      // spelling -- e.g. endStep=-2 and endStep=18 both resolve to the
+      // identical stopping index (18) under this session's totalSteps=20
+      // convention, so they are equivalent spellings of the same window
+      // and requiring raw equality too would wrongly disqualify a runtime
+      // that reports the absolute form of the window the request gave in
+      // relative form.
+      //
+      // Crucially, every normalized value used here is DERIVED
+      // independently right here, on BOTH the observed and expected
+      // sides, never trusted from the object's own normalizedStartStep/
+      // normalizedEndStep field as reported -- this comparator cannot
+      // assume either side necessarily passed through
+      // reduceTeaCacheObservation or MinimaxH3TeaCacheRequestSchema.parse
+      // (e.g. a stored result read directly off disk by a CLI compare
+      // path may only go through a parse call elsewhere, or none at all),
+      // so an object whose OWN reported raw/normalized pair is internally
+      // inconsistent must still be caught here regardless of which side
+      // it appears on.
+      const deriveNormalized = (raw: number, totalSteps: number): number =>
+        raw < 0 ? totalSteps + raw : raw;
+      const obsDerivedStartStep = deriveNormalized(
+        obs.effectiveConfig.startStep,
+        obs.effectiveConfig.totalSteps
+      );
+      const obsDerivedEndStep = deriveNormalized(
+        obs.effectiveConfig.endStep,
+        obs.effectiveConfig.totalSteps
+      );
+      const expectedDerivedStartStep = deriveNormalized(
+        expectedRequest.startStep,
+        expectedRequest.totalSteps
+      );
+      const expectedDerivedEndStep = deriveNormalized(
+        expectedRequest.endStep,
+        expectedRequest.totalSteps
+      );
+      if (obs.effectiveConfig.normalizedStartStep !== obsDerivedStartStep) {
         reasons.push(
-          `${role} observed effectiveConfig startStep ${obs.effectiveConfig.startStep} !== expected ${expectedRequest.startStep}.`
+          `${role} observed effectiveConfig reports an internally inconsistent raw/normalized startStep: startStep=${obs.effectiveConfig.startStep} (totalSteps=${obs.effectiveConfig.totalSteps}) derives to ${obsDerivedStartStep}, but normalizedStartStep=${obs.effectiveConfig.normalizedStartStep} was reported.`
         );
       }
-      // Compare the NORMALIZED window only, not the raw endStep spelling --
-      // endStep=-2 and endStep=18 both resolve to the identical stopping
-      // index (18) under this session's totalSteps=20 convention, so they
-      // are equivalent spellings of the same window and requiring raw
-      // equality too would wrongly disqualify a runtime that reports the
-      // absolute form of the window the request gave in relative form.
-      //
-      // Crucially, the normalized value used here is DERIVED independently
-      // right here, never trusted from obs.effectiveConfig.normalizedEndStep
-      // as reported -- this comparator cannot assume its input necessarily
-      // passed through reduceTeaCacheObservation (e.g. a stored result read
-      // directly off disk by a CLI compare path only goes through schema
-      // parsing, which does not itself enforce this derivation), so an
-      // effectiveConfig whose OWN reported endStep/normalizedEndStep pair is
-      // internally inconsistent must still be caught here, not just by the
-      // reducer.
-      const obsDerivedNormalizedEndStep =
-        obs.effectiveConfig.endStep < 0
-          ? obs.effectiveConfig.totalSteps + obs.effectiveConfig.endStep
-          : obs.effectiveConfig.endStep;
-      const expectedDerivedNormalizedEndStep =
-        expectedRequest.endStep < 0
-          ? expectedRequest.totalSteps + expectedRequest.endStep
-          : expectedRequest.endStep;
-      if (obs.effectiveConfig.normalizedEndStep !== obsDerivedNormalizedEndStep) {
+      if (obs.effectiveConfig.normalizedEndStep !== obsDerivedEndStep) {
         reasons.push(
-          `${role} observed effectiveConfig reports an internally inconsistent raw/normalized endStep: endStep=${obs.effectiveConfig.endStep} (totalSteps=${obs.effectiveConfig.totalSteps}) derives to ${obsDerivedNormalizedEndStep}, but normalizedEndStep=${obs.effectiveConfig.normalizedEndStep} was reported.`
+          `${role} observed effectiveConfig reports an internally inconsistent raw/normalized endStep: endStep=${obs.effectiveConfig.endStep} (totalSteps=${obs.effectiveConfig.totalSteps}) derives to ${obsDerivedEndStep}, but normalizedEndStep=${obs.effectiveConfig.normalizedEndStep} was reported.`
         );
-      } else if (obsDerivedNormalizedEndStep !== expectedDerivedNormalizedEndStep) {
+      }
+      if (expectedRequest.normalizedStartStep !== expectedDerivedStartStep) {
         reasons.push(
-          `${role} observed effectiveConfig endStep ${obs.effectiveConfig.endStep} (normalized ${obsDerivedNormalizedEndStep}) !== expected ${expectedRequest.endStep} (normalized ${expectedDerivedNormalizedEndStep}).`
+          `${role} expected request reports an internally inconsistent raw/normalized startStep: startStep=${expectedRequest.startStep} (totalSteps=${expectedRequest.totalSteps}) derives to ${expectedDerivedStartStep}, but normalizedStartStep=${expectedRequest.normalizedStartStep} was reported.`
+        );
+      }
+      if (expectedRequest.normalizedEndStep !== expectedDerivedEndStep) {
+        reasons.push(
+          `${role} expected request reports an internally inconsistent raw/normalized endStep: endStep=${expectedRequest.endStep} (totalSteps=${expectedRequest.totalSteps}) derives to ${expectedDerivedEndStep}, but normalizedEndStep=${expectedRequest.normalizedEndStep} was reported.`
+        );
+      }
+      if (obsDerivedStartStep !== expectedDerivedStartStep) {
+        reasons.push(
+          `${role} observed effectiveConfig startStep ${obs.effectiveConfig.startStep} (normalized ${obsDerivedStartStep}) !== expected ${expectedRequest.startStep} (normalized ${expectedDerivedStartStep}).`
+        );
+      }
+      if (obsDerivedEndStep !== expectedDerivedEndStep) {
+        reasons.push(
+          `${role} observed effectiveConfig endStep ${obs.effectiveConfig.endStep} (normalized ${obsDerivedEndStep}) !== expected ${expectedRequest.endStep} (normalized ${expectedDerivedEndStep}).`
         );
       }
       if (obs.effectiveConfig.totalSteps !== expectedRequest.totalSteps) {

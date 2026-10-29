@@ -102,6 +102,50 @@ export const MinimaxH3TeaCachePatchNodeSchema = z
   .strict();
 export type MinimaxH3TeaCachePatchNode = z.infer<typeof MinimaxH3TeaCachePatchNodeSchema>;
 
+// Enforces that normalizedStartStep/normalizedEndStep are the values
+// DERIVED from startStep/endStep under the documented convention
+// (negative -> totalSteps + raw, else identity), and that the resulting
+// resolved window falls within [2, 18] with start < end. Applied to both
+// TeaCacheConfig and TeaCacheRequest so this relational invariant is
+// enforced at the schema boundary itself, not only by callers (the
+// reducer, the comparator) that happen to re-derive it themselves --
+// a schema-valid-but-internally-contradictory object (e.g. startStep=2,
+// endStep=10, normalizedEndStep=18) must never parse successfully.
+function refineTeaCacheWindow(
+  val: {
+    startStep: number;
+    endStep: number;
+    totalSteps: number;
+    normalizedStartStep: number;
+    normalizedEndStep: number;
+  },
+  ctx: z.RefinementCtx
+): void {
+  const derivedStartStep = val.startStep < 0 ? val.totalSteps + val.startStep : val.startStep;
+  const derivedEndStep = val.endStep < 0 ? val.totalSteps + val.endStep : val.endStep;
+  if (val.normalizedStartStep !== derivedStartStep) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["normalizedStartStep"],
+      message: `normalizedStartStep (${val.normalizedStartStep}) must equal startStep (${val.startStep}) resolved against totalSteps (${val.totalSteps}); derived ${derivedStartStep}.`
+    });
+  }
+  if (val.normalizedEndStep !== derivedEndStep) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["normalizedEndStep"],
+      message: `normalizedEndStep (${val.normalizedEndStep}) must equal endStep (${val.endStep}) resolved against totalSteps (${val.totalSteps}); derived ${derivedEndStep}.`
+    });
+  }
+  if (!(derivedStartStep >= 2 && derivedStartStep < derivedEndStep && derivedEndStep <= 18)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["normalizedEndStep"],
+      message: `Resolved step window [${derivedStartStep}, ${derivedEndStep}) must satisfy 2 <= start < end <= 18.`
+    });
+  }
+}
+
 export const MinimaxH3TeaCacheConfigSchema = z
   .object({
     mode: MinimaxH3TeaCacheModeSchema,
@@ -120,7 +164,8 @@ export const MinimaxH3TeaCacheConfigSchema = z
     normalizedStartStep: z.number().int().min(2),
     normalizedEndStep: z.number().int().max(18)
   })
-  .strict();
+  .strict()
+  .superRefine(refineTeaCacheWindow);
 export type MinimaxH3TeaCacheConfig = z.infer<typeof MinimaxH3TeaCacheConfigSchema>;
 
 export const MinimaxH3TeaCacheRequestSchema = z
@@ -147,7 +192,8 @@ export const MinimaxH3TeaCacheRequestSchema = z
     topologyDigest: sha256HashSchema,
     patchNode: MinimaxH3TeaCachePatchNodeSchema.nullable()
   })
-  .strict();
+  .strict()
+  .superRefine(refineTeaCacheWindow);
 export type MinimaxH3TeaCacheRequest = z.infer<typeof MinimaxH3TeaCacheRequestSchema>;
 
 export const MinimaxH3TeaCacheObservationCoverageSchema = z

@@ -284,14 +284,30 @@ export function reduceTeaCacheObservation(
                 typeof ec.normalizedStartStep === "number" ? ec.normalizedStartStep : undefined;
               const reportedNormalizedEndStep =
                 typeof ec.normalizedEndStep === "number" ? ec.normalizedEndStep : undefined;
+              // startStep itself (the RAW value, per
+              // MinimaxH3TeaCacheConfigSchema) must never be negative --
+              // only endStep uses the negative-offset-from-end convention.
+              // A negative startStep sailed through here before, producing
+              // an observedEffectiveConfig that later crashed
+              // MinimaxH3TeaCacheObservationSchema.safeParse downstream
+              // (startStep: z.number().int().min(0)) instead of failing
+              // cleanly in this reducer.
+              const startStepNegative = ec.startStep < 0;
+              const windowOutOfBounds = !(
+                derivedNormalizedStartStep >= 2 &&
+                derivedNormalizedStartStep < derivedNormalizedEndStep &&
+                derivedNormalizedEndStep <= 18
+              );
               if (
+                startStepNegative ||
+                windowOutOfBounds ||
                 (reportedNormalizedStartStep !== undefined &&
                   reportedNormalizedStartStep !== derivedNormalizedStartStep) ||
                 (reportedNormalizedEndStep !== undefined &&
                   reportedNormalizedEndStep !== derivedNormalizedEndStep)
               ) {
                 failureReasons.push(
-                  `Observed effectiveConfig reports an internally inconsistent raw/normalized step window: startStep=${ec.startStep} (normalized ${reportedNormalizedStartStep ?? derivedNormalizedStartStep}, derived ${derivedNormalizedStartStep}), endStep=${ec.endStep} (normalized ${reportedNormalizedEndStep ?? derivedNormalizedEndStep}, derived ${derivedNormalizedEndStep}).`
+                  `Observed effectiveConfig reports an internally inconsistent or out-of-bounds step window: startStep=${ec.startStep} (normalized ${reportedNormalizedStartStep ?? derivedNormalizedStartStep}, derived ${derivedNormalizedStartStep}), endStep=${ec.endStep} (normalized ${reportedNormalizedEndStep ?? derivedNormalizedEndStep}, derived ${derivedNormalizedEndStep}); resolved window must satisfy 2 <= start < end <= 18 with startStep itself non-negative.`
                 );
               } else {
                 observedEffectiveConfig = {

@@ -450,6 +450,52 @@ describe("minimax-h3-teacache-reducer", () => {
     expect(obs?.failureReason).toMatch(/internally inconsistent/i);
   });
 
+  it("rejects an observed effectiveConfig reporting a negative raw startStep instead of constructing an observation that would later crash schema validation (issue #467 adversarial probe)", () => {
+    const events: MinimaxH3InstrumentationEvent[] = [
+      makeEvent("sampling", "span_start"),
+      makeEvent("sampling", "span_start", {
+        teacacheSession: "start",
+        effectiveConfig: {
+          mode: "raw-l1-v1",
+          relL1Thresh: 0.15,
+          // startStep itself must never be negative -- only endStep uses
+          // the negative-offset-from-end convention. A prior version
+          // derived normalizedStartStep from a negative raw startStep
+          // (20 + -18 = 2, which happens to land in-bounds) and
+          // constructed an observedEffectiveConfig anyway, producing a
+          // result that MinimaxH3TeaCacheObservationSchema.safeParse
+          // later rejects (startStep: z.number().int().min(0)) instead of
+          // this reducer failing cleanly up front.
+          startStep: -18,
+          endStep: -2,
+          totalSteps: 20,
+          normalizedStartStep: 2,
+          normalizedEndStep: 18
+        }
+      }),
+      makeEvent("sampling", "point_event", {
+        teacacheSummary: {
+          status: "verified",
+          forwardCallsRecorded: 14,
+          cacheHitsRecorded: 6,
+          modelForwardsRecorded: 14,
+          nestedForwardsOnHits: 0
+        }
+      }),
+      makeEvent("sampling", "span_end", { teacacheSession: "end" })
+    ];
+
+    const obs = reduceTeaCacheObservation({
+      events,
+      teacacheRequest: sampleRequest,
+      expectedRunId: "run-1"
+    });
+
+    expect(obs?.status).toBe("failed");
+    expect(obs?.failureReason).toMatch(/internally inconsistent or out-of-bounds/i);
+    expect(obs?.effectiveConfig).toBeNull();
+  });
+
   it("does not flag an effectiveConfig window mismatch when the observed endStep is merely an equivalent absolute spelling of the requested relative endStep (issue #467 adversarial probe)", () => {
     // sampleRequest below requests endStep=-2 (normalizedEndStep=18).
     // Reporting endStep=18 (non-negative, so its own normalization is
