@@ -54,3 +54,4 @@ export * from "./campaign-duration-planning-errors.js";
 export * from "./campaign-duration-plan.js";
 export * from "./replan-campaign.js";
 export * from "./operator-acceptance.js";
+export * from "./fasth3-omni-experiment.js";
