@@ -1,7 +1,8 @@
 import {
   computeTeaCacheCatalogDigest,
   TEACACHE_UPSTREAM_COMMIT,
-  type MinimaxH3TeaCacheCatalogEntry
+  type MinimaxH3TeaCacheCatalogEntry,
+  type MinimaxH3TeaCacheMode
 } from "@cco/contracts";
 
 export const RAW_MINIMAX_H3_TEACACHE_CATALOG: readonly Omit<
@@ -307,4 +308,20 @@ export function getTeaCacheCatalogEntry(
     );
   }
   return match;
+}
+
+/** Selects the catalog variant for a TeaCache request mode ("off" is the matched control). */
+export function teaCacheCatalogVariantForMode(
+  mode: MinimaxH3TeaCacheMode
+): "matched-control" | "teacache-raw-l1" {
+  switch (mode) {
+    case "off":
+      return "matched-control";
+    case "raw-l1-v1":
+      return "teacache-raw-l1";
+    default: {
+      const unreachable: never = mode;
+      throw new Error(`Unsupported TeaCache mode: ${String(unreachable)}`);
+    }
+  }
 }

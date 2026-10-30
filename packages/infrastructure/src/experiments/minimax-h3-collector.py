@@ -638,7 +638,49 @@ VERIFIED_VEDA_EXCLUSION_REASONS = frozenset(
     _VEDA_EXCLUSION_SPEC.get("supportedExclusionReasons", ["full-attention layer", "full-attention step"])
 )
 
+_TEACACHE_PACKAGE_DIR_NAMES = ("cco-minimax-h3-teacache", "ComfyUI-MiniMaxH3-TeaCache", "minimax-h3-teacache")
+
+
+def _target_comfy_root() -> Optional[str]:
+    entry = _BOOTSTRAP_ENTRYPOINT or os.environ.get("CCO_EXPERIMENT_BOOTSTRAP_ENTRYPOINT")
+    if not entry:
+        return None
+    return os.path.dirname(os.path.abspath(entry))
+
+
+def _teacache_allowed_root() -> Optional[str]:
+    root = _target_comfy_root()
+    if root is None:
+        return None
+    return os.path.realpath(os.path.join(root, "custom_nodes"))
+
+
+def _is_within(path: str, root: str) -> bool:
+    try:
+        real = os.path.realpath(path)
+    except Exception:
+        return False
+    root_real = os.path.realpath(root)
+    return real == root_real or real.startswith(root_real + os.sep)
+
+
 def _resolve_teacache_module(guider=None, model_patcher=None):
+    """Resolve the TeaCache adapter module strictly within the target
+    ComfyUI installation's custom_nodes directory. There is deliberately no
+    repository-relative, cwd-relative, or hardcoded-path fallback: a missing
+    or unloaded target custom node must surface as None, not be masked."""
+    allowed_root = _teacache_allowed_root()
+    if allowed_root is None:
+        return None
+
+    def _accept(mod):
+        if mod is None or not hasattr(mod, "TeaCacheSession"):
+            return None
+        mod_file = getattr(mod, "__file__", None)
+        if not mod_file or not _is_within(mod_file, allowed_root):
+            return None
+        return mod
+
     # 1. Inspect model_patcher or guider for wrapped model
     mp = model_patcher
     if mp is None and guider is not None:
@@ -650,12 +692,12 @@ def _resolve_teacache_module(guider=None, model_patcher=None):
             while hasattr(wrapper, "__wrapped__"):
                 wrapper = getattr(wrapper, "__wrapped__")
             if wrapper is not None:
-                mod = getattr(wrapper, "_teacache_module", None)
-                if mod is not None and hasattr(mod, "TeaCacheSession"):
+                mod = _accept(getattr(wrapper, "_teacache_module", None))
+                if mod is not None:
                     return mod
                 fn_globals = getattr(wrapper, "__globals__", {})
-                mod = fn_globals.get("_teacache_mod") or fn_globals.get("teacache")
-                if mod is not None and hasattr(mod, "TeaCacheSession"):
+                mod = _accept(fn_globals.get("_teacache_mod") or fn_globals.get("teacache"))
+                if mod is not None:
                     return mod
 
     # 2. Check ComfyUI registered node classes if available
@@ -665,13 +707,13 @@ def _resolve_teacache_module(guider=None, model_patcher=None):
         for key in ("CCOMiniMaxH3TeaCache", "MiniMaxH3TeaCache"):
             if key in mappings:
                 cls = mappings[key]
-                mod = getattr(cls, "_teacache_module", None)
-                if mod is not None and hasattr(mod, "TeaCacheSession"):
+                mod = _accept(getattr(cls, "_teacache_module", None))
+                if mod is not None:
                     return mod
                 cls_mod = sys.modules.get(cls.__module__)
                 if cls_mod is not None:
-                    mod = getattr(cls_mod, "_teacache_mod", None) or getattr(cls_mod, "teacache", None)
-                    if mod is not None and hasattr(mod, "TeaCacheSession"):
+                    mod = _accept(getattr(cls_mod, "_teacache_mod", None) or getattr(cls_mod, "teacache", None))
+                    if mod is not None:
                         return mod
     except Exception:
         pass
@@ -679,56 +721,31 @@ def _resolve_teacache_module(guider=None, model_patcher=None):
     # 3. Search sys.modules for loaded adapter packages
     for mod_name, mod in list(sys.modules.items()):
         if mod is not None and hasattr(mod, "CCOMiniMaxH3TeaCacheNode"):
-            tc_mod = getattr(mod, "_teacache_module", None) or getattr(mod, "_teacache_mod", None) or getattr(mod, "teacache", None)
-            if tc_mod is not None and hasattr(tc_mod, "TeaCacheSession"):
+            tc_mod = _accept(getattr(mod, "_teacache_module", None) or getattr(mod, "_teacache_mod", None) or getattr(mod, "teacache", None))
+            if tc_mod is not None:
                 return tc_mod
 
     for mod_name, mod in list(sys.modules.items()):
         if mod is not None and (mod_name.endswith(".teacache") or mod_name == "teacache"):
-            if hasattr(mod, "TeaCacheSession") and hasattr(mod, "get_active_session") and hasattr(mod, "set_active_session"):
-                return mod
+            if hasattr(mod, "get_active_session") and hasattr(mod, "set_active_session"):
+                tc_mod = _accept(mod)
+                if tc_mod is not None:
+                    return tc_mod
 
-    # 4. Check custom_nodes directories for staged cco-minimax-h3-teacache
-    for base in [os.getcwd(), "/opt/comfyui-isolated-teacache"]:
-        cn_dir = os.path.join(base, "custom_nodes")
-        if os.path.isdir(cn_dir):
-            for entry in ["cco-minimax-h3-teacache", "ComfyUI-MiniMaxH3-TeaCache", "minimax-h3-teacache"]:
-                pkg_path = os.path.join(cn_dir, entry)
-                tc_file = os.path.join(pkg_path, "teacache.py")
-                if os.path.isfile(tc_file):
-                    try:
-                        import importlib.util
-                        spec = importlib.util.spec_from_file_location(f"custom_nodes_{entry.replace('-', '_')}_teacache", tc_file)
-                        if spec and spec.loader:
-                            mod = importlib.util.module_from_spec(spec)
-                            spec.loader.exec_module(mod)
-                            if hasattr(mod, "TeaCacheSession"):
-                                return mod
-                    except Exception:
-                        pass
-
-    # 5. Fallback import
-    try:
-        from experiments.minimax_h3_teacache import teacache
-        return teacache
-    except Exception:
-        pass
-    try:
-        import teacache
-        return teacache
-    except Exception:
-        pass
-    candidates = [
-        os.path.join(os.getcwd(), "experiments", "minimax-h3-teacache"),
-        os.path.join(os.path.dirname(__file__), "../../../../experiments/minimax-h3-teacache")
-    ]
-    for cdir in candidates:
-        norm = os.path.normpath(cdir)
-        if os.path.exists(norm) and norm not in sys.path:
-            sys.path.insert(0, norm)
+    # 4. Staged adapter package inside the target's custom_nodes only
+    for entry in _TEACACHE_PACKAGE_DIR_NAMES:
+        pkg_path = os.path.join(allowed_root, entry)
+        tc_file = os.path.join(pkg_path, "teacache.py")
+        if os.path.isfile(tc_file) and _is_within(tc_file, allowed_root):
             try:
-                import teacache
-                return teacache
+                import importlib.util
+                spec = importlib.util.spec_from_file_location(f"custom_nodes_{entry.replace('-', '_')}_teacache", tc_file)
+                if spec and spec.loader:
+                    mod = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(mod)
+                    mod = _accept(mod)
+                    if mod is not None:
+                        return mod
             except Exception:
                 pass
     return None
@@ -767,6 +784,9 @@ def _verify_teacache_adapter_identity(tc_mod) -> Dict[str, Any]:
     if not mod_file:
         return {"verified": False, "reason": "resolved_module_has_no___file__"}
     package_dir = os.path.dirname(os.path.abspath(mod_file))
+    allowed_root = _teacache_allowed_root()
+    if allowed_root is None or not _is_within(package_dir, allowed_root):
+        return {"verified": False, "reason": "adapter_outside_target_custom_nodes", "packageDir": package_dir}
     digest = _compute_teacache_adapter_digest(package_dir)
     if digest is None:
         return {"verified": False, "reason": "missing_adapter_files", "packageDir": package_dir}
@@ -779,6 +799,21 @@ def _verify_teacache_adapter_identity(tc_mod) -> Dict[str, Any]:
             "expectedDigest": TEACACHE_LOCAL_ADAPTER_DIGEST
         }
     return {"verified": True, "packageDir": package_dir, "observedDigest": digest}
+
+
+def _require_verified_teacache_adapter(tc_mod, identity, context: str) -> None:
+    """Fail closed (candidate and matched-control alike) when no adapter was
+    resolved within the target custom_nodes or its identity is unverified."""
+    if tc_mod is None:
+        raise RuntimeError(
+            f"TeaCache adapter module could not be resolved within the target custom_nodes "
+            f"for {context} run. Refusing to proceed without a verified adapter."
+        )
+    if not identity or not identity.get("verified"):
+        raise RuntimeError(
+            f"TeaCache adapter identity verification failed on {context} run: {identity}. "
+            "Refusing to use an unverified/substituted adapter module."
+        )
 
 
 def extract_layer_and_step(args, kwargs):
@@ -1160,6 +1195,60 @@ def compute_hook_manifest_digest(hooks: list) -> str:
     canonical = json.dumps(sorted_hooks, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
+def _canonical_signature(value):
+    """Normalize per the shared rule (mirrors canonicalizeInputSignature in
+    packages/contracts): dict keys sorted at dump time, tuples -> lists,
+    finite integral floats -> ints. Raises TypeError for non-JSON values."""
+    if isinstance(value, bool) or value is None or isinstance(value, (str, int)):
+        return value
+    if isinstance(value, float):
+        if value != value or value in (float("inf"), float("-inf")):
+            raise TypeError("non-finite float in input signature")
+        return int(value) if value == int(value) else value
+    if isinstance(value, (list, tuple)):
+        return [_canonical_signature(v) for v in value]
+    if isinstance(value, dict):
+        return {str(k): _canonical_signature(v) for k, v in value.items()}
+    raise TypeError(f"non-JSON-able input signature value: {type(value).__name__}")
+
+
+def _compute_input_signature_hash(cls) -> Optional[str]:
+    try:
+        raw = cls.INPUT_TYPES()
+        sig = {k: raw[k] for k in ("required", "optional") if k in raw}
+        payload = json.dumps(_canonical_signature(sig), sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    except Exception:
+        return None
+
+
+def _custom_node_package_dir(src_file: str) -> Optional[str]:
+    allowed_root = _teacache_allowed_root()
+    if allowed_root is None:
+        return None
+    real = os.path.realpath(src_file)
+    if not _is_within(real, allowed_root):
+        return None
+    rel = os.path.relpath(real, allowed_root)
+    parts = rel.split(os.sep)
+    if len(parts) < 2:
+        return None
+    return os.path.join(allowed_root, parts[0])
+
+
+def _hash_package_top_level_py(pkg_dir: str) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    try:
+        for fname in sorted(os.listdir(pkg_dir)):
+            fpath = os.path.join(pkg_dir, fname)
+            if fname.endswith(".py") and os.path.isfile(fpath):
+                with open(fpath, "rb") as f:
+                    out[fname] = hashlib.sha256(f.read()).hexdigest()
+    except Exception:
+        pass
+    return out
+
+
 def register_capability_route(prompt_server, collector: Collector):
     try:
         from aiohttp import web
@@ -1206,6 +1295,15 @@ def register_capability_route(prompt_server, collector: Collector):
                         revision = _resolve_custom_node_git_revision(src_file)
                         if revision:
                             entry["revision"] = revision
+                    if src_file:
+                        pkg_dir = _custom_node_package_dir(src_file)
+                        if pkg_dir:
+                            pkg_hashes = _hash_package_top_level_py(pkg_dir)
+                            if pkg_hashes:
+                                entry["packageFileHashes"] = pkg_hashes
+                            sig_hash = _compute_input_signature_hash(cls)
+                            if sig_hash:
+                                entry["inputSignatureHash"] = sig_hash
                     registered_nodes[str(name)] = entry
             except Exception:
                 pass
@@ -1404,6 +1502,10 @@ def register_capability_route(prompt_server, collector: Collector):
                     "execution": "execution.py",
                     "comfy.samplers": "comfy/samplers.py",
                     "comfy_extras.nodes_custom_sampler": "comfy_extras/nodes_custom_sampler.py",
+                    "comfy.model_patcher": "comfy/model_patcher.py",
+                    "comfy.model_base": "comfy/model_base.py",
+                    "comfy.sampler_helpers": "comfy/sampler_helpers.py",
+                    "comfy.ldm.minimax.model": "comfy/ldm/minimax/model.py",
                 }
                 for mod_k, identity_path in source_modules.items():
                     if mod_k in sys.modules:
@@ -1424,6 +1526,11 @@ def register_capability_route(prompt_server, collector: Collector):
                             if os.path.isfile(cand):
                                 with open(cand, "rb") as f:
                                     source_identities[identity_path] = hashlib.sha256(f.read()).hexdigest()
+                    lock_rel = "custom_nodes/cco-minimax-h3-teacache/locks/requirements-teacache-cu124.txt"
+                    lock_path = os.path.join(base_dir, lock_rel)
+                    if os.path.isfile(lock_path) and _is_within(lock_path, os.path.join(base_dir, "custom_nodes")):
+                        with open(lock_path, "rb") as f:
+                            source_identities[lock_rel] = hashlib.sha256(f.read()).hexdigest()
             except Exception:
                 pass
 
@@ -1854,12 +1961,12 @@ def _install_hooks_inner(collector: Collector):
                     tc_adapter_identity = None
                     if tc_mod is not None:
                         tc_adapter_identity = _verify_teacache_adapter_identity(tc_mod)
-                        if teacache_config is not None and not tc_adapter_identity.get("verified"):
-                            raise RuntimeError(
-                                "TeaCache adapter identity verification failed: "
-                                f"{tc_adapter_identity}. Refusing to use an unverified/substituted "
-                                "adapter module for a configured TeaCache render."
-                            )
+                    if teacache_config is not None or os.environ.get("CCO_EXPERIMENT_TEACACHE_MODE") == "off":
+                        _require_verified_teacache_adapter(
+                            tc_mod,
+                            tc_adapter_identity,
+                            "candidate" if teacache_config is not None else "matched-control"
+                        )
                     if tc_mod is not None and teacache_config is not None:
                         def on_tc_event(*cb_args, **cb_kwargs):
                             evt_name = cb_kwargs.get("event", "unknown")
@@ -1918,12 +2025,6 @@ def _install_hooks_inner(collector: Collector):
                         # adapter identity requirement the candidate path
                         # does above, not silently skip it just because
                         # teacache_config is None here.
-                        if tc_mod is not None and not tc_adapter_identity.get("verified"):
-                            raise RuntimeError(
-                                "TeaCache adapter identity verification failed on matched-control "
-                                f"run: {tc_adapter_identity}. Refusing to certify a control run against "
-                                "an unverified/substituted adapter module."
-                            )
                         control_session_id = collector.next_span_id("teacache_control_session")
                         collector.emit(
                             "sampling",

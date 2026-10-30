@@ -1,5 +1,7 @@
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { TEACACHE_NODE_INPUT_SIGNATURE_HASH } from "@cco/contracts";
 import { describe, expect, it } from "vitest";
 
 const TEACACHE_DIR = resolve("experiments/minimax-h3-teacache");
@@ -1353,7 +1355,13 @@ import importlib.util
 import os
 import sys
 
-pkg_dir = os.path.abspath('experiments/minimax-h3-teacache')
+import shutil
+import tempfile
+comfy_root = tempfile.mkdtemp()
+open(os.path.join(comfy_root, 'main.py'), 'w').write('')
+pkg_dir = os.path.join(comfy_root, 'custom_nodes', 'cco-minimax-h3-teacache')
+shutil.copytree(os.path.abspath('experiments/minimax-h3-teacache'), pkg_dir, ignore=shutil.ignore_patterns('__pycache__'))
+os.environ['CCO_EXPERIMENT_BOOTSTRAP_ENTRYPOINT'] = os.path.join(comfy_root, 'main.py')
 init_file = os.path.join(pkg_dir, '__init__.py')
 spec = importlib.util.spec_from_file_location('custom_nodes_teacache', init_file, submodule_search_locations=[pkg_dir])
 pkg = importlib.util.module_from_spec(spec)
@@ -1490,6 +1498,100 @@ print("SUCCESS")
       const res = runPythonTest(code);
       expect(res.status).toBe(0);
       expect(res.stdout).toContain("SUCCESS");
+    });
+  });
+
+  describe("strict target-scoped adapter resolution (issue #494)", () => {
+    const loadCollector = `
+import importlib.util, os, shutil, sys, tempfile
+c_spec = importlib.util.spec_from_file_location('collector_mod', os.path.abspath('packages/infrastructure/src/experiments/minimax-h3-collector.py'))
+c_mod = importlib.util.module_from_spec(c_spec)
+c_spec.loader.exec_module(c_mod)
+comfy_root = tempfile.mkdtemp()
+open(os.path.join(comfy_root, 'main.py'), 'w').write('')
+`;
+
+    it("returns None when no bootstrap entrypoint identifies the target ComfyUI", () => {
+      const res = runPythonTest(`${loadCollector}
+os.environ.pop('CCO_EXPERIMENT_BOOTSTRAP_ENTRYPOINT', None)
+c_mod._BOOTSTRAP_ENTRYPOINT = None
+assert c_mod._resolve_teacache_module() is None
+print("OK")
+`);
+      expect(res.stdout).toContain("OK");
+    });
+
+    it("does not resolve an adapter imported from outside the target custom_nodes", () => {
+      const res = runPythonTest(`${loadCollector}
+os.environ['CCO_EXPERIMENT_BOOTSTRAP_ENTRYPOINT'] = os.path.join(comfy_root, 'main.py')
+sys.path.insert(0, os.path.abspath('experiments/minimax-h3-teacache'))
+import teacache
+assert c_mod._resolve_teacache_module() is None
+os.chdir(os.path.dirname(os.path.abspath('experiments/minimax-h3-teacache')))
+assert c_mod._resolve_teacache_module() is None
+print("OK")
+`);
+      expect(res.stdout).toContain("OK");
+    });
+
+    it("rejects a symlinked custom_nodes package pointing at the repo checkout", () => {
+      const res = runPythonTest(`${loadCollector}
+os.environ['CCO_EXPERIMENT_BOOTSTRAP_ENTRYPOINT'] = os.path.join(comfy_root, 'main.py')
+os.makedirs(os.path.join(comfy_root, 'custom_nodes'))
+os.symlink(os.path.abspath('experiments/minimax-h3-teacache'), os.path.join(comfy_root, 'custom_nodes', 'cco-minimax-h3-teacache'))
+assert c_mod._resolve_teacache_module() is None
+print("OK")
+`);
+      expect(res.stdout).toContain("OK");
+    });
+
+    it("resolves and verifies a copied adapter staged in the target custom_nodes", () => {
+      const res = runPythonTest(`${loadCollector}
+os.environ['CCO_EXPERIMENT_BOOTSTRAP_ENTRYPOINT'] = os.path.join(comfy_root, 'main.py')
+pkg = os.path.join(comfy_root, 'custom_nodes', 'cco-minimax-h3-teacache')
+shutil.copytree(os.path.abspath('experiments/minimax-h3-teacache'), pkg, ignore=shutil.ignore_patterns('__pycache__'))
+mod = c_mod._resolve_teacache_module()
+assert mod is not None
+ident = c_mod._verify_teacache_adapter_identity(mod)
+assert ident['verified'] is True, ident
+print("OK")
+`);
+      expect(res.stdout).toContain("OK");
+    });
+
+    it("fails closed via _require_verified_teacache_adapter when unresolved", () => {
+      const res = runPythonTest(`${loadCollector}
+for ctx in ('candidate', 'matched-control'):
+    try:
+        c_mod._require_verified_teacache_adapter(None, None, ctx)
+        raise SystemExit('expected raise')
+    except RuntimeError:
+        pass
+print("OK")
+`);
+      expect(res.stdout).toContain("OK");
+    });
+
+    it("computes the same input signature hash as the contracts constant", () => {
+      const res = runPythonTest(`${loadCollector}
+sys.path.insert(0, os.path.abspath('experiments/minimax-h3-teacache'))
+import nodes as tc_nodes
+print("SIG=" + str(c_mod._compute_input_signature_hash(tc_nodes.CCOMiniMaxH3TeaCacheNode)))
+`);
+      expect(res.stdout).toContain(`SIG=${TEACACHE_NODE_INPUT_SIGNATURE_HASH}`);
+    });
+
+    it("keeps no hardcoded or repo-relative fallback in _resolve_teacache_module", () => {
+      const src = readFileSync(
+        resolve("packages/infrastructure/src/experiments/minimax-h3-collector.py"),
+        "utf-8"
+      );
+      const start = src.indexOf("def _resolve_teacache_module");
+      const body = src.slice(start, src.indexOf("\n# Pinned post-adaptation", start));
+      expect(body).not.toContain("/opt/comfyui-isolated-teacache");
+      expect(body).not.toContain("experiments/minimax-h3-teacache");
+      expect(body).not.toContain("minimax_h3_teacache");
+      expect(body).not.toContain("os.getcwd()");
     });
   });
 });

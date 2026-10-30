@@ -449,3 +449,42 @@ describe("MiniMax-H3 TeaCache Contracts", () => {
     });
   });
 });
+
+describe("TeaCache pinned provenance constants (issue #494)", () => {
+  it("TEACACHE_DEPENDENCY_LOCK_SHA256 equals the committed lock file hash", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { createHash } = await import("node:crypto");
+    const { fileURLToPath } = await import("node:url");
+    const { TEACACHE_DEPENDENCY_LOCK_SHA256 } = await import("./minimax-h3-teacache.js");
+    const lock = fileURLToPath(
+      new URL(
+        "../../../experiments/minimax-h3-teacache/locks/requirements-teacache-cu124.txt",
+        import.meta.url
+      )
+    );
+    expect(createHash("sha256").update(readFileSync(lock)).digest("hex")).toBe(
+      TEACACHE_DEPENDENCY_LOCK_SHA256
+    );
+  });
+
+  it("TEACACHE_NODE_INPUT_SIGNATURE_HASH equals the fixture inputSignature hash", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const mod = await import("./minimax-h3-teacache.js");
+    const { sha256Hex } = await import("./minimax-h3-experiment.js");
+    const fx = JSON.parse(
+      readFileSync(
+        fileURLToPath(
+          new URL(
+            "../../../experiments/minimax-h3-teacache/fixtures/teacache-api.json",
+            import.meta.url
+          )
+        ),
+        "utf-8"
+      )
+    ) as { inputSignature: unknown };
+    expect(sha256Hex(mod.canonicalizeInputSignature(fx.inputSignature))).toBe(
+      mod.TEACACHE_NODE_INPUT_SIGNATURE_HASH
+    );
+  });
+});

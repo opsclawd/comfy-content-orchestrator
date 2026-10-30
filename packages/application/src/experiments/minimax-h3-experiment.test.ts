@@ -5128,14 +5128,25 @@ describe("MiniMax-H3 Step Reduction Sampling Recipe Validation & Tampering Detec
       const descV2 = descriptor as MinimaxH3ExperimentDescriptorV2;
       const registeredNodes: Record<
         string,
-        { className: string; module: string; revision?: string; moduleHash?: string }
+        {
+          className: string;
+          module: string;
+          revision?: string;
+          moduleHash?: string;
+          packageFileHashes?: Record<string, string>;
+          inputSignatureHash?: string;
+        }
       > = {};
       for (const n of descV2.requiredRuntime.requiredNodes) {
         registeredNodes[n.name] = {
           className: n.name,
           module: "comfy_extras.nodes_minimax_h3",
           ...(n.revision ? { revision: n.revision } : {}),
-          ...(n.moduleHash ? { moduleHash: n.moduleHash } : {})
+          ...(n.moduleHash ? { moduleHash: n.moduleHash } : {}),
+          ...(n.moduleFileHashes ? { packageFileHashes: n.moduleFileHashes } : {}),
+          ...(n.expectedInputSignatureHash
+            ? { inputSignatureHash: n.expectedInputSignatureHash }
+            : {})
         };
       }
 
@@ -5151,6 +5162,11 @@ describe("MiniMax-H3 Step Reduction Sampling Recipe Validation & Tampering Detec
         hookManifestDigest: descV2.requiredRuntime.hookManifestDigest,
         installedHooks: descV2.requiredRuntime.hooks.map((h) => ({ ...h, attached: true })),
         registeredNodes,
+        teacacheAdapterIdentity: {
+          verified: true,
+          packageDir: "/opt/comfyui/custom_nodes/cco-minimax-h3-teacache",
+          observedDigest: descV2.teacacheRequest?.adapterDigest
+        },
         kernelCallableAvailable: true,
         runtimeVersions: {
           driverVersion: "560.35.03",

@@ -58,6 +58,55 @@ export const TEACACHE_LOCAL_ADAPTER_FILE_HASHES = Object.freeze({
   "teacache.py": "d2aec13bfacdcbeae7bebca828f7721aad9370d90605aea66016df7b3ffea9bb"
 });
 
+// Pinned-core source hashes for the files the TeaCache adapter patches or
+// depends on, measured at ComfyUI core 55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc
+// (the production pin in .comfyui-version). Derivation:
+//   curl -fsSL https://raw.githubusercontent.com/Comfy-Org/ComfyUI/55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc/<path> | sha256sum
+// Deliberately NOT PINNED_COMFYUI_NODES_MINIMAX_H3_PY_SHA256, which is the
+// FastH3 `ee71d5c` revision's hash. Keys are paths relative to the ComfyUI dir.
+export const TEACACHE_PINNED_CORE_SOURCE_HASHES: Readonly<Record<string, string>> = Object.freeze({
+  "comfy_extras/nodes_minimax_h3.py":
+    "0570b1cbf3dce6177e4fbfc712332bb3bac36b2189146b4c2142af97fda09d3c",
+  "comfy/model_patcher.py": "ac214200ea7991b9903c24f28457e2924357b025dbb9e353f1d3d2d397a9bd17",
+  "comfy/samplers.py": "69498999dd1198c05fa64fa2a7b7090d21090c470d2304191e483a0543fcefd2",
+  "comfy/model_base.py": "c5eaedcdc54e619f3b7d47bd8979d679a77edc72976c389439ca0dac83495b7d",
+  "comfy_extras/nodes_custom_sampler.py":
+    "b0ba1521c72475e06fed15db004274ed7c8bb2bf73f1d58849faf6f9f9d264fe",
+  "comfy/sampler_helpers.py": "53c82235bfea0c4edf3cd5219f080c44c45ac1c9a6c3171f2aae151e18b56b91",
+  "comfy/ldm/minimax/model.py": "61390fc441961ccc833452e71380dad1f2beb1924fcccaec59701040d3697d7b"
+});
+
+// The staged adapter package dir (relative to the ComfyUI dir) and the
+// dependency lock bound inside it. Lock hash is sha256 of
+// experiments/minimax-h3-teacache/locks/requirements-teacache-cu124.txt.
+export const TEACACHE_STAGED_PACKAGE_DIR = "custom_nodes/cco-minimax-h3-teacache";
+export const TEACACHE_DEPENDENCY_LOCK_RELATIVE_PATH = "locks/requirements-teacache-cu124.txt";
+export const TEACACHE_DEPENDENCY_LOCK_SHA256 =
+  "ed4136a711c3de50ee9202c9dc5551acfb489f39bcd962ec08a7c711bcfab765";
+
+/**
+ * Shared canonical rule for the node INPUT_TYPES() signature hash (also
+ * implemented in the collector): dict keys sorted, tuples -> lists, finite
+ * integral floats -> ints. JS numbers already serialize 0.0 as 0, so
+ * canonicalizeJson implements the rule on this side.
+ */
+export function canonicalizeInputSignature(value: unknown): string {
+  return canonicalizeJson(value);
+}
+
+// sha256 of canonicalizeInputSignature(fixtures/teacache-api.json#inputSignature).
+export const TEACACHE_NODE_INPUT_SIGNATURE_HASH = sha256Hex(
+  canonicalizeInputSignature({
+    required: {
+      model: ["MODEL"],
+      rel_l1_thresh: ["FLOAT", { default: 0.15, min: 0.0, max: 0.5, step: 0.01 }],
+      start_step: ["INT", { default: 2, min: 0, max: 100, step: 1 }],
+      end_step: ["INT", { default: -2, min: -100, max: 100, step: 1 }],
+      total_steps: ["INT", { default: 20, min: 1, max: 1000, step: 1 }]
+    }
+  })
+);
+
 export const TEACACHE_LOCAL_ADAPTER_DIGEST = sha256Hex(
   canonicalizeJson(TEACACHE_LOCAL_ADAPTER_FILE_HASHES)
 );

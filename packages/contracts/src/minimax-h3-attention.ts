@@ -568,7 +568,9 @@ export const MinimaxH3CapabilityHandshakeSchema = z
           module: z.string().optional(),
           sourceFile: z.string().optional(),
           moduleHash: sha256HashSchema.optional(),
-          revision: z.string().optional()
+          revision: z.string().optional(),
+          packageFileHashes: z.record(z.string().min(1), sha256HashSchema).optional(),
+          inputSignatureHash: sha256HashSchema.optional()
         })
         .strict()
     ),
@@ -658,7 +660,9 @@ export const MinimaxH3AttentionIdentityEnvelopeSchema = z
           module: z.string().optional(),
           sourceFile: z.string().optional(),
           moduleHash: sha256HashSchema.optional(),
-          revision: z.string().optional()
+          revision: z.string().optional(),
+          packageFileHashes: z.record(z.string().min(1), sha256HashSchema).optional(),
+          inputSignatureHash: sha256HashSchema.optional()
         })
         .strict()
     ),
