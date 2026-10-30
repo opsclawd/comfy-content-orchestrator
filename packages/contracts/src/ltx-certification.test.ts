@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   CertificationArtifactSchema,
+  MinimaxH3Ref2vWorkloadIdentitySchema,
+  MinimaxH3Ref2vBaseWorkloadIdentitySchema,
+  MinimaxH3Ref2vTurbo4WorkloadIdentitySchema,
   type LtxCertificationArtifact,
   type CertificationArtifact
 } from "./ltx-certification.js";
@@ -374,6 +377,99 @@ describe("CertificationArtifactSchema", () => {
       };
       const failRes = CertificationArtifactSchema.safeParse(failedWithoutFailureObject);
       expect(failRes.success).toBe(false);
+    });
+  });
+
+  describe("MinimaxH3Ref2vWorkloadIdentitySchema", () => {
+    const validBaseIdentity = {
+      profileId: "minimax-h3-720p-124f-ref2v" as const,
+      renderProfileKey: "MINIMAX_H3_720P_5S_REF2V_V1" as const,
+      renderProfileVersion: 1 as const,
+      engine: "minimax_h3_ref2v" as const,
+      width: 1344 as const,
+      height: 768 as const,
+      frames: 124 as const,
+      steps: 20 as const,
+      workflowSha256: "a".repeat(64),
+      modelSha256: {
+        checkpoint: "b".repeat(64)
+      },
+      comfyUiCommit: "c".repeat(40),
+      customNodes: [
+        {
+          name: "ComfyUI-MiniMax-H3",
+          commit: "d".repeat(40),
+          status: "tracked" as const
+        }
+      ]
+    };
+
+    const validTurbo4Identity = {
+      profileId: "minimax-h3-720p-124f-ref2v-turbo4" as const,
+      renderProfileKey: "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1" as const,
+      renderProfileVersion: 1 as const,
+      engine: "minimax_h3_ref2v" as const,
+      width: 1344 as const,
+      height: 768 as const,
+      frames: 124 as const,
+      steps: 4 as const,
+      workflowSha256: "a".repeat(64),
+      modelSha256: {
+        checkpoint: "b".repeat(64),
+        lora: "e".repeat(64)
+      },
+      comfyUiCommit: "c".repeat(40),
+      customNodes: [
+        {
+          name: "ComfyUI-MiniMax-H3",
+          commit: "d".repeat(40),
+          status: "tracked" as const
+        }
+      ]
+    };
+
+    it("accepts base-20 ref2v workload identity", () => {
+      expect(MinimaxH3Ref2vBaseWorkloadIdentitySchema.parse(validBaseIdentity)).toEqual(
+        validBaseIdentity
+      );
+      expect(MinimaxH3Ref2vWorkloadIdentitySchema.parse(validBaseIdentity)).toEqual(
+        validBaseIdentity
+      );
+    });
+
+    it("accepts turbo-4 ref2v workload identity", () => {
+      expect(MinimaxH3Ref2vTurbo4WorkloadIdentitySchema.parse(validTurbo4Identity)).toEqual(
+        validTurbo4Identity
+      );
+      expect(MinimaxH3Ref2vWorkloadIdentitySchema.parse(validTurbo4Identity)).toEqual(
+        validTurbo4Identity
+      );
+    });
+
+    it("rejects cross-paired profileId, key, or steps", () => {
+      // Turbo identity with 20 steps
+      expect(() =>
+        MinimaxH3Ref2vTurbo4WorkloadIdentitySchema.parse({
+          ...validTurbo4Identity,
+          steps: 20
+        })
+      ).toThrow();
+
+      // Base identity with 4 steps
+      expect(() =>
+        MinimaxH3Ref2vBaseWorkloadIdentitySchema.parse({
+          ...validBaseIdentity,
+          steps: 4
+        })
+      ).toThrow();
+
+      // Mismatched key and profileId
+      expect(() =>
+        MinimaxH3Ref2vWorkloadIdentitySchema.parse({
+          ...validTurbo4Identity,
+          renderProfileKey: "MINIMAX_H3_720P_5S_REF2V_V1"
+        })
+      ).toThrow();
     });
   });
 });

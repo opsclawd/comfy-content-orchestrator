@@ -416,6 +416,91 @@
         "key": "MINIMAX_H3_720P_5S_REF2V_V1",
         "version": 1
       }
+    },
+    {
+      "id": "minimax-h3-720p-124f-ref2v-turbo4",
+      "engine": "minimax_h3_ref2v",
+      "workflowRelativePath": "minimax_h3_720p_ref2v_turbo4_124f_api.json",
+      "expectedWorkflowHash": "82834f3253f10c87c4051e89341fcc547d391315b989765399642b483f7392b0",
+      "source": {
+        "kind": "authored_from_spec",
+        "uri": "https://github.com/comfyanonymous/ComfyUI",
+        "revision": "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+        "license": "GPL-3.0"
+      },
+      "baseline": {
+        "width": 1344,
+        "height": 768,
+        "frames": 124,
+        "steps": 4,
+        "approximateDurationSeconds": 5
+      },
+      "minFreeDiskGb": 50,
+      "runnerProfile": "dynamicvram-offload-v1",
+      "models": [
+        {
+          "category": "diffusion_models",
+          "relativePath": "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
+        },
+        {
+          "category": "clip",
+          "relativePath": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
+        },
+        {
+          "category": "vae",
+          "relativePath": "minimax_h3_video_vae_int8_convrot.safetensors"
+        },
+        {
+          "category": "vae",
+          "relativePath": "minimax_h3_audio_vae_fp32.safetensors"
+        },
+        {
+          "category": "loras",
+          "relativePath": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors"
+        }
+      ],
+      "assertions": [
+        {
+          "nodeId": "9",
+          "classType": "BasicScheduler",
+          "input": "steps",
+          "equals": 4
+        },
+        {
+          "nodeId": "301",
+          "classType": "LoraLoaderModelOnly",
+          "input": "lora_name",
+          "equals": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors"
+        },
+        {
+          "nodeId": "301",
+          "classType": "LoraLoaderModelOnly",
+          "input": "strength_model",
+          "equals": 1
+        },
+        {
+          "nodeId": "105",
+          "classType": "MiniMaxH3ReferenceToVideo",
+          "input": "width",
+          "equals": 1344
+        },
+        {
+          "nodeId": "105",
+          "classType": "MiniMaxH3ReferenceToVideo",
+          "input": "height",
+          "equals": 768
+        },
+        {
+          "nodeId": "105",
+          "classType": "MiniMaxH3ReferenceToVideo",
+          "input": "length",
+          "equals": 124
+        }
+      ],
+      "renderProfileIdentity": {
+        "key": "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1",
+        "version": 1
+      }
     }
   ]
 }

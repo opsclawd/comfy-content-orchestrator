@@ -41,6 +41,28 @@ export const INITIAL_CAMPAIGN_FORM_VALUES: CampaignCreationFormValues = {
   candidateReferenceAssetIds: []
 };
 
+export function isMinimaxH3EngineProfileId(profileId: string | null | undefined): boolean {
+  if (!profileId) return false;
+  return (
+    profileId === "MINIMAX_H3_720P_5S_I2V_V1" ||
+    profileId === "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1" ||
+    profileId === "MINIMAX_H3_720P_5S_REF2V_V1" ||
+    profileId === "minimax_h3" ||
+    profileId === "minimax-h3" ||
+    isMinimaxH3TurboEngineProfileId(profileId)
+  );
+}
+
+export function isMinimaxH3TurboEngineProfileId(profileId: string | null | undefined): boolean {
+  if (!profileId) return false;
+  const normalized = profileId.toLowerCase().trim();
+  return (
+    normalized === "minimax_h3_720p_5s_ref2v_turbo4_v1" ||
+    normalized === "minimax-h3-720p-5s-ref2v-turbo4-v1" ||
+    normalized === "minimax-h3-720p-124f-ref2v-turbo4"
+  );
+}
+
 export type CampaignCreationPhase =
   "idle" | "validation-failed" | "submitting" | "succeeded" | "submit-error";
 

@@ -173,5 +173,17 @@ describe("ComponentLicenseRegistry contracts", () => {
     expect(ref2vEntry).toBeDefined();
     expect(ref2vEntry?.status).toBe("approved");
     expect(ref2vEntry?.reviewedAt).toBeDefined();
+
+    // The turbo profile's license entry is deliberately NOT approved: no
+    // human has reviewed or attested to its license-term compliance yet
+    // (see #481). It must stay "review_required" with no reviewedAt so
+    // EnforceLicenseRouting fails closed until a human (not this agent)
+    // performs that review and edits the entry themselves.
+    const turbo4Entry = registry.entries.find(
+      (e) => e.componentId === "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1"
+    );
+    expect(turbo4Entry).toBeDefined();
+    expect(turbo4Entry?.status).toBe("review_required");
+    expect(turbo4Entry?.reviewedAt).toBeUndefined();
   });
 });

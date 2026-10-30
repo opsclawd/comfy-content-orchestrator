@@ -450,6 +450,112 @@ describe("CampaignCreationForm Component", () => {
       expect(calledRequest.targetEngineProfileId).toBe("LTX_25_720P_5S_V1");
     });
 
+    it("renders MiniMax-H3 Turbo toggle unchecked by default and submits with base profile", async () => {
+      const mockSubmit = vi.fn().mockResolvedValue(sampleSuccessResponse);
+      render(
+        <CampaignCreationForm
+          submitCampaign={mockSubmit}
+          initialValues={validValues}
+          initialClients={defaultClients}
+        />
+      );
+
+      const turboToggle = screen.getByTestId("minimax-h3-turbo-toggle") as HTMLInputElement;
+      expect(turboToggle).not.toBeNull();
+      expect(turboToggle.checked).toBe(false);
+
+      const submitBtn = screen.getByTestId("submit-campaign-button");
+      fireEvent.click(submitBtn);
+
+      await waitFor(() => {
+        expect(mockSubmit).toHaveBeenCalledTimes(1);
+      });
+
+      const firstCall = mockSubmit.mock.calls[0];
+      expect(firstCall![0].targetEngineProfileId).toBe("MINIMAX_H3_720P_5S_I2V_V1");
+    });
+
+    it("checking turbo toggle updates targetEngineProfileId to turbo and submits with turbo profile", async () => {
+      const mockSubmit = vi.fn().mockResolvedValue(sampleSuccessResponse);
+      render(
+        <CampaignCreationForm
+          submitCampaign={mockSubmit}
+          initialValues={validValues}
+          initialClients={defaultClients}
+        />
+      );
+
+      const turboToggle = screen.getByTestId("minimax-h3-turbo-toggle") as HTMLInputElement;
+      expect(turboToggle.checked).toBe(false);
+
+      fireEvent.click(turboToggle);
+      expect(turboToggle.checked).toBe(true);
+
+      const submitBtn = screen.getByTestId("submit-campaign-button");
+      fireEvent.click(submitBtn);
+
+      await waitFor(() => {
+        expect(mockSubmit).toHaveBeenCalledTimes(1);
+      });
+
+      const firstCall = mockSubmit.mock.calls[0];
+      expect(firstCall![0].targetEngineProfileId).toBe("MINIMAX_H3_720P_5S_REF2V_TURBO4_V1");
+    });
+
+    it("unchecking turbo toggle restores base MiniMax-H3 profile", async () => {
+      const mockSubmit = vi.fn().mockResolvedValue(sampleSuccessResponse);
+      render(
+        <CampaignCreationForm
+          submitCampaign={mockSubmit}
+          initialValues={{
+            ...validValues,
+            targetEngineProfileId: "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1"
+          }}
+          initialClients={defaultClients}
+        />
+      );
+
+      const turboToggle = screen.getByTestId("minimax-h3-turbo-toggle") as HTMLInputElement;
+      expect(turboToggle.checked).toBe(true);
+
+      fireEvent.click(turboToggle);
+      expect(turboToggle.checked).toBe(false);
+
+      const submitBtn = screen.getByTestId("submit-campaign-button");
+      fireEvent.click(submitBtn);
+
+      await waitFor(() => {
+        expect(mockSubmit).toHaveBeenCalledTimes(1);
+      });
+
+      const firstCall = mockSubmit.mock.calls[0];
+      expect(firstCall![0].targetEngineProfileId).toBe("MINIMAX_H3_720P_5S_I2V_V1");
+    });
+
+    it("switching to LTX-Video 2.5 hides the turbo toggle and switching back selects base MiniMax-H3", async () => {
+      render(
+        <CampaignCreationForm
+          submitCampaign={vi.fn().mockResolvedValue(sampleSuccessResponse)}
+          initialValues={validValues}
+          initialClients={defaultClients}
+        />
+      );
+
+      expect(screen.getByTestId("minimax-h3-turbo-toggle")).not.toBeNull();
+
+      const ltxRadio = screen.getByTestId("engine-radio-ltx-25");
+      fireEvent.click(ltxRadio);
+
+      expect(screen.queryByTestId("minimax-h3-turbo-toggle")).toBeNull();
+
+      const minimaxRadio = screen.getByTestId("engine-radio-minimax-h3");
+      fireEvent.click(minimaxRadio);
+
+      const restoredToggle = screen.getByTestId("minimax-h3-turbo-toggle") as HTMLInputElement;
+      expect(restoredToggle).not.toBeNull();
+      expect(restoredToggle.checked).toBe(false);
+    });
+
     it("allows selecting Custom mode, entering integer, and submitting with sceneCountOverride", async () => {
       const mockSubmit = vi.fn().mockResolvedValue(sampleSuccessResponse);
       render(

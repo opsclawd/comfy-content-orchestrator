@@ -422,6 +422,27 @@ describe("Profile-Scoped Frame Capabilities", () => {
     }
   });
 
+  it("resolves Turbo Ref2V profile and aliases strictly to [124]", () => {
+    const keys = [
+      "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1",
+      "minimax-h3-720p-5s-ref2v-turbo4-v1",
+      "minimax_h3_720p_5s_ref2v_turbo4_v1",
+      "minimax-h3-720p-124f-ref2v-turbo4"
+    ];
+    for (const key of keys) {
+      const cap = resolveH3ProfileFrameCapabilities(key);
+      expect(cap).toBeDefined();
+      expect(cap!.profileKey).toBe("MINIMAX_H3_720P_5S_REF2V_TURBO4_V1");
+      expect(cap!.allowedFrameCounts).toEqual([124]);
+      expect(cap!.isAllowedFrameCount(124)).toBe(true);
+      expect(cap!.isAllowedFrameCount(192)).toBe(false);
+      expect(cap!.route).toBe("ref2v");
+      expect(cap!.routingMode).toBe("reference_directed");
+      expect(isFrameCountAllowedForH3Profile(key, 124)).toBe(true);
+      expect(isFrameCountAllowedForH3Profile(key, 243)).toBe(false);
+    }
+  });
+
   it("returns undefined for unknown or unaccepted candidates in production", () => {
     expect(resolveH3ProfileFrameCapabilities("UNKNOWN_PROFILE")).toBeUndefined();
     expect(isFrameCountAllowedForH3Profile("UNKNOWN_PROFILE", 124)).toBe(false);
