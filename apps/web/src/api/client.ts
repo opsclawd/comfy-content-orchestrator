@@ -43,6 +43,10 @@ import {
   type CreateShotPlanVariationResponse,
   CreateShotPlanVariationErrorResponseSchema,
   type CreateShotPlanVariationErrorResponse,
+  RerollPrevisBeatRequestSchema,
+  type RerollPrevisBeatRequest,
+  RerollPrevisBeatResponseSchema,
+  type RerollPrevisBeatResponse,
   H3ProductionInspectionReadModelSchema,
   type H3ProductionInspectionReadModel,
   type ClientListItem,
@@ -846,6 +850,85 @@ export async function createShotPlanVariation(
 ): Promise<CreateShotPlanVariationResponse> {
   const client = createApiClient({ fetchFn: fetchImpl });
   return client.createShotPlanVariation(sceneId, request);
+}
+
+export class RerollPrevisBeatApiError extends Error {
+  override readonly name = "RerollPrevisBeatApiError";
+
+  constructor(
+    public readonly statusCode: number,
+    public readonly error: { code?: string | undefined; message: string }
+  ) {
+    super(`Previs re-roll failed with HTTP ${statusCode}: ${error.message}`);
+  }
+}
+
+export async function rerollPrevisBeat(
+  params: { sceneId: string; shotPlanId: string; beatIndex: number },
+  request: RerollPrevisBeatRequest,
+  config?: ApiClientConfig
+): Promise<RerollPrevisBeatResponse> {
+  const baseUrl = resolveBaseUrl(config?.baseUrl);
+  const fetchFn = config?.fetchFn ?? globalThis.fetch;
+  const parsedRequest = RerollPrevisBeatRequestSchema.safeParse(request);
+  if (!parsedRequest.success) {
+    throw new ApiValidationError(
+      `Previs re-roll request failed validation: ${parsedRequest.error.message}`,
+      parsedRequest.error.issues
+    );
+  }
+  const url = `${baseUrl}/api/scenes/${encodeURIComponent(params.sceneId)}/shot-plans/${encodeURIComponent(params.shotPlanId)}/beats/${params.beatIndex}/previs-reroll`;
+
+  let res: Response;
+  try {
+    res = await fetchFn(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      cache: "no-store",
+      body: JSON.stringify(parsedRequest.data)
+    });
+  } catch (err) {
+    throw new ApiClientError(formatFetchErrorMessage(err), undefined, err);
+  }
+
+  if (!res.ok) {
+    let errorData: unknown;
+    try {
+      errorData = await res.json();
+    } catch {
+      throw new ApiClientError(
+        `Control API returned HTTP ${res.status}: ${res.statusText}`,
+        res.status
+      );
+    }
+    const message =
+      typeof (errorData as { message?: unknown } | null)?.message === "string"
+        ? (errorData as { message: string }).message
+        : `HTTP ${res.status}`;
+    const code = (errorData as { code?: unknown } | null)?.code;
+    throw new RerollPrevisBeatApiError(res.status, {
+      ...(typeof code === "string" ? { code } : {}),
+      message
+    });
+  }
+
+  let successData: unknown;
+  try {
+    successData = await res.json();
+  } catch (err) {
+    throw new ApiValidationError(
+      `Failed to parse response JSON from Control API: ${err instanceof Error ? err.message : String(err)}`,
+      err
+    );
+  }
+  const parsed = RerollPrevisBeatResponseSchema.safeParse(successData);
+  if (!parsed.success) {
+    throw new ApiValidationError(
+      `Control API response failed schema validation: ${parsed.error.message}`,
+      parsed.error.issues
+    );
+  }
+  return parsed.data;
 }
 
 export async function listClients(fetchImpl?: typeof fetch): Promise<readonly ClientListItem[]> {

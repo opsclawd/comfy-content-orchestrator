@@ -29,6 +29,9 @@ import {
   InvalidShotPlanVariantCountError,
   CrossSceneSourceShotPlanError,
   InvalidSceneStateForVariationError,
+  InvalidSceneStateForPrevisRerollError,
+  PrevisBeatNotFoundError,
+  StalePrevisCandidateConflictError,
   ShotPlanVariationIdempotencyConflictError,
   SourceShotPlanNotFoundError,
   StaleSourceShotPlanRevisionError,
@@ -251,7 +254,8 @@ export function formatReviewError(error: unknown): {
     error instanceof CampaignNotFoundError ||
     error instanceof ClientNotFoundError ||
     error instanceof ReferenceAssetNotFoundError ||
-    error instanceof SourceShotPlanNotFoundError
+    error instanceof SourceShotPlanNotFoundError ||
+    error instanceof PrevisBeatNotFoundError
   ) {
     return {
       statusCode: 404,
@@ -287,6 +291,33 @@ export function formatReviewError(error: unknown): {
           sourceShotPlanId: error.sourceShotPlanId,
           status: error.status
         }
+      }
+    };
+  }
+
+  if (error instanceof StalePrevisCandidateConflictError) {
+    return {
+      statusCode: 409,
+      body: {
+        code: "STALE_PREVIS_CANDIDATE",
+        message: error.message,
+        details: {
+          shotPlanId: error.shotPlanId,
+          beatIndex: error.beatIndex,
+          expectedCandidateId: error.expectedCandidateId,
+          currentCandidateId: error.currentCandidateId ?? null
+        }
+      }
+    };
+  }
+
+  if (error instanceof InvalidSceneStateForPrevisRerollError) {
+    return {
+      statusCode: 409,
+      body: {
+        code: "INVALID_SCENE_STATE",
+        message: error.message,
+        details: { sceneId: error.sceneId, currentStatus: error.status }
       }
     };
   }

@@ -6429,3 +6429,104 @@ describe("Certified Render Job Executor", () => {
     });
   });
 });
+
+describe("Certified Render Job Executor: previs text advisory", () => {
+  const storyboardProfile: CertificationProfile = {
+    ...fakeFluxProfile,
+    id: "flux_schnell_storyboard_v1"
+  };
+
+  function buildExecutor(
+    profile: CertificationProfile,
+    detector: { detectText: ReturnType<typeof vi.fn> } | undefined
+  ) {
+    return createCertifiedRenderJobExecutor({
+      loadCertificationProfile: async () => profile,
+      readApprovedProvenance: async () => fakeFluxLiveProvenance,
+      collectCertificationProvenance: async () => fakeFluxLiveProvenance,
+      verifyGoldMasterProvenance: () => {},
+      readWorkflowFile: async () => fakeRawFluxWorkflow,
+      hashWorkflow: () => sampleWorkflowHash,
+      executeProfileRender: async (input: ExecuteProfileRenderInput) => ({
+        status: "succeeded",
+        promptId: "prompt-12345",
+        outputObjectKeys: ["flux_schnell_00001_.png"],
+        durationMs: 4200,
+        profile: input.identity,
+        preDispatchGpu: {
+          totalVramMb: 24576,
+          usedVramMb: 4096,
+          freeVramMb: 20480,
+          reservedVramMb: 4096,
+          measuredAt: new Date().toISOString()
+        }
+      }),
+      outputReader: new FakeOutputReader(),
+      ...(detector
+        ? { previsTextDetector: detector, previsTextAdvisoryLogger: { info: () => {} } }
+        : {})
+    });
+  }
+
+  const flaggingDetector = () => ({
+    detectText: vi.fn(async () => ({
+      engine: { id: "fixture", version: "1" },
+      regions: [{ text: "LENTA", confidence: 0.9 }]
+    }))
+  });
+
+  it("attaches a flagged advisory for storyboard previs candidates and still completes", async () => {
+    const detector = flaggingDetector();
+    const output = await buildExecutor(
+      storyboardProfile,
+      detector
+    )(createSampleCandidateJob({ workflowTemplate: "flux_schnell_storyboard_v1" }));
+    expect(detector.detectText).toHaveBeenCalledTimes(1);
+    const payload = output.candidatePayload!.generationPayload as {
+      textAdvisory: { status: string };
+    };
+    expect(payload.textAdvisory.status).toBe("flagged");
+  });
+
+  it("degrades to unavailable when the detector throws, without failing the job", async () => {
+    const detector = {
+      detectText: vi.fn(async () => {
+        throw new Error("boom");
+      })
+    };
+    const output = await buildExecutor(
+      storyboardProfile,
+      detector
+    )(createSampleCandidateJob({ workflowTemplate: "flux_schnell_storyboard_v1" }));
+    const payload = output.candidatePayload!.generationPayload as {
+      textAdvisory: { status: string };
+    };
+    expect(payload.textAdvisory.status).toBe("unavailable");
+    expect(output.mediaObjects).toHaveLength(1);
+  });
+
+  it("does not run for other candidate profiles", async () => {
+    const detector = flaggingDetector();
+    const output = await buildExecutor(fakeFluxProfile, detector)(createSampleCandidateJob());
+    expect(detector.detectText).not.toHaveBeenCalled();
+    expect(output.candidatePayload!.generationPayload).not.toHaveProperty("textAdvisory");
+  });
+
+  it("never invokes the detector for production jobs, even under the storyboard profile id", async () => {
+    const detector = flaggingDetector();
+    // The production path may reject this synthetic job; the guarantee under test is
+    // only that the previs OCR pass is never reached.
+    await Promise.resolve(
+      buildExecutor(storyboardProfile, detector)(createSampleProductionJob())
+    ).catch(() => undefined);
+    expect(detector.detectText).not.toHaveBeenCalled();
+  });
+
+  it("leaves the payload unchanged when no detector is wired", async () => {
+    const output = await buildExecutor(
+      storyboardProfile,
+      undefined
+    )(createSampleCandidateJob({ workflowTemplate: "flux_schnell_storyboard_v1" }));
+    expect(output.candidatePayload!.generationPayload).not.toHaveProperty("textAdvisory");
+  });
+});

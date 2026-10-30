@@ -57,6 +57,7 @@ import {
   PlanSceneConfigurationUseCase,
   PlanShotPlansUseCase,
   CreateShotPlanVariationUseCase,
+  RerollPrevisBeatUseCase,
   ProgressSceneProductionUseCases,
   PrepareSceneProductionInputsUseCase,
   RankReviewCandidatesUseCase,
@@ -179,6 +180,7 @@ export interface ControlApiUseCases {
   readonly updateReferenceAssetRole?: UpdateReferenceAssetRoleUseCase | undefined;
   readonly planShotPlans?: PlanShotPlansUseCase | undefined;
   readonly createShotPlanVariation?: CreateShotPlanVariationUseCase | undefined;
+  readonly rerollPrevisBeat?: RerollPrevisBeatUseCase | undefined;
 
   readonly createProductSku?: CreateProductSkuUseCase | undefined;
   readonly getProductSku?: GetProductSkuUseCase | undefined;
@@ -245,6 +247,7 @@ export function createControlApiContainer(
           : {})
       })
     : undefined;
+  const rerollPrevisBeat = new RerollPrevisBeatUseCase(dependencies.uow);
   const autoPlanLogger: AutoPlanFirstPassLogger = dependencies.logger ?? console;
   const reviewScene = new ReviewSceneUseCases(
     dependencies.uow,
@@ -676,6 +679,7 @@ export function createControlApiContainer(
       ...(updateReferenceAssetRole !== undefined ? { updateReferenceAssetRole } : {}),
       ...(planShotPlans !== undefined ? { planShotPlans } : {}),
       ...(createShotPlanVariation !== undefined ? { createShotPlanVariation } : {}),
+      rerollPrevisBeat,
       ...(createProductSku !== undefined ? { createProductSku } : {}),
       ...(getProductSku !== undefined ? { getProductSku } : {}),
       ...(listProductSkus !== undefined ? { listProductSkus } : {}),

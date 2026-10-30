@@ -172,7 +172,8 @@ This protocol was followed exactly: one revision (Iteration 2) was drafted
 and re-rendered against the same Fixture B baseline/seeds; it remained
 persistent at 1/3 clean, so this document records
 `UNRESOLVED_OCR_ADVISORY_REQUIRED` and recommends the OCR-advisory follow-up
-rather than further open-ended iteration.
+rather than further open-ended iteration. The follow-up is documented in
+[storyboard-previs-ocr-advisory.md](storyboard-previs-ocr-advisory.md).
 
 ## 7. Operator Sign-off
 

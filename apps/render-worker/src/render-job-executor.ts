@@ -32,7 +32,11 @@ import {
   type ManifestSourceProvenance,
   type ProductionReleaseCapabilityReader,
   H3CandidateEligibilityService,
-  parseImageByteHeader
+  parseImageByteHeader,
+  runPrevisTextAdvisory,
+  STORYBOARD_PREVIS_PROFILE_ID,
+  type PrevisTextAdvisoryPolicy,
+  type PrevisTextDetectionPort
 } from "@cco/application";
 import {
   computeAuthorizationPayloadDigest,
@@ -66,6 +70,7 @@ import {
   EvidenceOriginSchema,
   RENDER_PROFILE_ALIASES,
   type RenderProfileKey,
+  type PrevisTextAdvisory,
   type ShotPlanRoutingMode,
   type H3ReleaseProfileKey,
   isReleasedProductionProfileKey
@@ -315,6 +320,11 @@ export interface RenderJobExecutorDependencies {
   readonly sceneRepository?: SceneRepository | undefined;
   readonly campaignRepository?: CampaignRepository<CampaignRecord> | undefined;
   readonly now?: (() => Date) | undefined;
+  /** Advisory-only OCR for flux_schnell_storyboard_v1 previs stills; never blocks a job. */
+  readonly previsTextDetector?: PrevisTextDetectionPort | undefined;
+  readonly previsTextAdvisoryPolicy?: PrevisTextAdvisoryPolicy | undefined;
+  readonly previsTextAdvisoryTimeoutMs?: number | undefined;
+  readonly previsTextAdvisoryLogger?: Pick<Console, "info"> | undefined;
   readonly probeMedia?: typeof probeMedia | undefined;
   readonly isAnimatedWebp?: typeof isAnimatedWebp | undefined;
   readonly demuxAnimatedWebp?: typeof demuxAnimatedWebp | undefined;
@@ -4413,6 +4423,45 @@ export function createCertifiedRenderJobExecutor(
       // 9. Completion payload assembly
       if (job.jobKind === "candidate") {
         const primaryMedia = mediaObjects[0]!;
+        let textAdvisory: PrevisTextAdvisory | undefined;
+        if (profile.id === STORYBOARD_PREVIS_PROFILE_ID && deps?.previsTextDetector) {
+          const startedAt = Date.now();
+          textAdvisory = await runPrevisTextAdvisory(
+            deps.previsTextDetector,
+            {
+              bytes: new Uint8Array(
+                primaryMedia.body.buffer,
+                primaryMedia.body.byteOffset,
+                primaryMedia.body.byteLength
+              ),
+              contentType: primaryMedia.contentType
+            },
+            {
+              ...(deps.previsTextAdvisoryPolicy ? { policy: deps.previsTextAdvisoryPolicy } : {}),
+              ...(deps.previsTextAdvisoryTimeoutMs !== undefined
+                ? { timeoutMs: deps.previsTextAdvisoryTimeoutMs }
+                : {}),
+              now
+            }
+          );
+          try {
+            (deps.previsTextAdvisoryLogger ?? console).info(
+              JSON.stringify({
+                event: "previs_text_advisory",
+                jobId: job.jobId,
+                sceneId: job.sceneId,
+                shotPlanId: validatedInjected.shotPlanId,
+                beatIndex: validatedInjected.beatIndex,
+                status: textAdvisory.status,
+                maxConfidence: textAdvisory.maxConfidence,
+                detections: textAdvisory.detections.length,
+                durationMs: Date.now() - startedAt
+              })
+            );
+          } catch {
+            // Logging must never affect job completion.
+          }
+        }
         const candidatePayload: Readonly<Record<string, unknown>> = Object.freeze({
           variantOrdinal: validatedInjected.variantOrdinal!,
           storageBucket: primaryMedia.bucket,
@@ -4429,6 +4478,7 @@ export function createCertifiedRenderJobExecutor(
             promptIdComfy: renderResult.promptId,
             profile: renderResult.profile,
             originalOutputKey: renderResult.outputObjectKeys[0]!,
+            ...(textAdvisory ? { textAdvisory } : {}),
             ...(validatedInjected.beatIndex !== undefined
               ? { beatIndex: validatedInjected.beatIndex }
               : {}),

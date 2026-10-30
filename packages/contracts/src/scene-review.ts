@@ -7,6 +7,7 @@ import {
   PreviewAvailabilitySchema
 } from "./reference-asset.js";
 import { sha256HashSchema } from "./persistent-media.js";
+import { PrevisTextAdvisorySchema } from "./previs-text-advisory.js";
 import {
   ShotFramingSchema,
   CameraAngleSchema,
@@ -152,7 +153,8 @@ export const ShotPlanBeatFrameReviewItemSchema = z.object({
   beatIndex: z.number().int().positive(),
   status: ShotPlanBeatFrameStatusSchema,
   candidateId: z.string().uuid().optional(),
-  media: MediaAvailabilitySchema
+  media: MediaAvailabilitySchema,
+  textAdvisory: PrevisTextAdvisorySchema.optional()
 });
 export type ShotPlanBeatFrameReviewItem = z.infer<typeof ShotPlanBeatFrameReviewItemSchema>;
 
@@ -187,7 +189,8 @@ export const ShotPlanReviewItemSchema = z.object({
     .object({
       candidateId: z.string().uuid().nullable().optional(),
       media: MediaAvailabilitySchema,
-      reviewNotes: z.string().nullable().optional()
+      reviewNotes: z.string().nullable().optional(),
+      textAdvisory: PrevisTextAdvisorySchema.optional()
     })
     .nullable()
     .optional(),
