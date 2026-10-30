@@ -50,11 +50,39 @@ import {
   MINIMAX_H3_I2V_PRODUCTION_RENDER_PROFILE_KEY,
   MINIMAX_H3_I2V_PRODUCTION_WORKFLOW_TEMPLATE,
   MINIMAX_H3_REF2V_PRODUCTION_RENDER_PROFILE_KEY,
-  MINIMAX_H3_REF2V_PRODUCTION_WORKFLOW_TEMPLATE
+  MINIMAX_H3_REF2V_PRODUCTION_WORKFLOW_TEMPLATE,
+  MINIMAX_H3_REF2V_TURBO4_PRODUCTION_RENDER_PROFILE_KEY,
+  MINIMAX_H3_REF2V_TURBO4_PRODUCTION_WORKFLOW_TEMPLATE
 } from "./production-profile-constants.js";
 import { InvalidTransitionError } from "@cco/domain";
 
 export const MINIMAX_H3_EXECUTION_CEILING_SECONDS = 60 as const;
+
+export function resolveRef2vProductionProfileFromEngineProfileId(
+  engineProfileId: string | undefined
+): { renderProfileKey: string; workflowTemplate: string } {
+  if (!engineProfileId) {
+    return {
+      renderProfileKey: MINIMAX_H3_REF2V_PRODUCTION_RENDER_PROFILE_KEY,
+      workflowTemplate: MINIMAX_H3_REF2V_PRODUCTION_WORKFLOW_TEMPLATE
+    };
+  }
+  const normalized = engineProfileId.trim().toLowerCase();
+  if (
+    normalized === "minimax_h3_720p_5s_ref2v_turbo4_v1" ||
+    normalized === "minimax-h3-720p-5s-ref2v-turbo4-v1" ||
+    normalized === "minimax-h3-720p-124f-ref2v-turbo4"
+  ) {
+    return {
+      renderProfileKey: MINIMAX_H3_REF2V_TURBO4_PRODUCTION_RENDER_PROFILE_KEY,
+      workflowTemplate: MINIMAX_H3_REF2V_TURBO4_PRODUCTION_WORKFLOW_TEMPLATE
+    };
+  }
+  return {
+    renderProfileKey: MINIMAX_H3_REF2V_PRODUCTION_RENDER_PROFILE_KEY,
+    workflowTemplate: MINIMAX_H3_REF2V_PRODUCTION_WORKFLOW_TEMPLATE
+  };
+}
 
 export interface PrepareSceneProductionInputsOptions {
   readonly objectStorage?: ObjectStoragePort | undefined;
@@ -375,13 +403,17 @@ export class PrepareSceneProductionInputsUseCase {
       }
     }
 
+    const ref2vProductionProfile = resolveRef2vProductionProfileFromEngineProfileId(
+      snapshot.configuration.engineProfileId
+    );
+
     const renderProfileKey = candidateProfile
       ? candidateProfile.key
       : releasedProfile
         ? releasedProfile.key
         : routingMode === "frame_anchored"
           ? MINIMAX_H3_I2V_PRODUCTION_RENDER_PROFILE_KEY
-          : MINIMAX_H3_REF2V_PRODUCTION_RENDER_PROFILE_KEY;
+          : ref2vProductionProfile.renderProfileKey;
 
     const workflowTemplate = candidateProfile
       ? candidateProfile.specification.workflowHash
@@ -389,7 +421,7 @@ export class PrepareSceneProductionInputsUseCase {
         ? releasedProfile.specification.workflowHash
         : routingMode === "frame_anchored"
           ? MINIMAX_H3_I2V_PRODUCTION_WORKFLOW_TEMPLATE
-          : MINIMAX_H3_REF2V_PRODUCTION_WORKFLOW_TEMPLATE;
+          : ref2vProductionProfile.workflowTemplate;
 
     // 6. Duration Quantization
     const candidateCapability = candidateProfile

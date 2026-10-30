@@ -48,6 +48,7 @@ export interface CertificationProfile {
       | "LTX_25_720P_5S_I2V_V1"
       | "MINIMAX_H3_720P_5S_I2V_V1"
       | "MINIMAX_H3_720P_5S_REF2V_V1"
+      | "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1"
       // Released H3 profiles are dynamically hash-keyed and versioned (see
       // computeH3ReleaseKey in @cco/contracts); unlike the fixed manifest-defined
       // identities above, these are never parsed from an on-disk manifest file by
@@ -360,7 +361,8 @@ function validateRenderProfileIdentity(
     (key === "FLUX_SCHNELL_STORYBOARD_V1" && version === 1) ||
     (key === "LTX_25_720P_5S_I2V_V1" && version === 1) ||
     (key === "MINIMAX_H3_720P_5S_I2V_V1" && version === 1) ||
-    (key === "MINIMAX_H3_720P_5S_REF2V_V1" && version === 1)
+    (key === "MINIMAX_H3_720P_5S_REF2V_V1" && version === 1) ||
+    (key === "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1" && version === 1)
   ) {
     return {
       key,
@@ -369,7 +371,7 @@ function validateRenderProfileIdentity(
   }
 
   throw new Error(
-    `Profile "${profileId}": invalid renderProfileIdentity. Expected "LTX_25_720P_5S_V1" (v1), "FLUX_SCHNELL_DRAFT_V1" (v1), "FLUX_SCHNELL_STORYBOARD_V1" (v1), "LTX_25_720P_5S_I2V_V1" (v1), "MINIMAX_H3_720P_5S_I2V_V1" (v1), "MINIMAX_H3_720P_5S_REF2V_V1" (v1), or null, received: ${JSON.stringify(identity)}`
+    `Profile "${profileId}": invalid renderProfileIdentity. Expected "LTX_25_720P_5S_V1" (v1), "FLUX_SCHNELL_DRAFT_V1" (v1), "FLUX_SCHNELL_STORYBOARD_V1" (v1), "LTX_25_720P_5S_I2V_V1" (v1), "MINIMAX_H3_720P_5S_I2V_V1" (v1), "MINIMAX_H3_720P_5S_REF2V_V1" (v1), "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1" (v1), or null, received: ${JSON.stringify(identity)}`
   );
 }
 

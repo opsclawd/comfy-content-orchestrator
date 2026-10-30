@@ -110,6 +110,24 @@ export function resolveH3ProfileFrameCapabilities(
     });
   }
 
+  // Turbo Ref2V profile & aliases (1344x768, 24fps, [124])
+  if (
+    normalized === "minimax_h3_720p_5s_ref2v_turbo4_v1" ||
+    normalized === "minimax-h3-720p-5s-ref2v-turbo4-v1" ||
+    normalized === "minimax-h3-720p-124f-ref2v-turbo4"
+  ) {
+    return Object.freeze({
+      profileKey: "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1",
+      route: "ref2v",
+      routingMode: "reference_directed",
+      width: 1344,
+      height: 768,
+      fps: 24,
+      allowedFrameCounts: Object.freeze([124]),
+      isAllowedFrameCount: (f: number) => f === 124
+    });
+  }
+
   if (reader?.getProfileCapability) {
     const directCap = reader.getProfileCapability(profileKeyOrId);
     if (directCap) return directCap;

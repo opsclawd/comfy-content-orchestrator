@@ -378,12 +378,13 @@ export const GenerationManifestSchema = z
 
     if (
       (data.renderProfile === "MINIMAX_H3_720P_5S_REF2V_V1" ||
+        data.renderProfile === "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1" ||
         data.engine === "minimax_h3_ref2v") &&
       data.routingMode !== "reference_directed"
     ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: `Profile "MINIMAX_H3_720P_5S_REF2V_V1" / engine "minimax_h3_ref2v" requires routingMode "reference_directed", got "${data.routingMode}"`,
+        message: `Profile "${data.renderProfile}" / engine "minimax_h3_ref2v" requires routingMode "reference_directed", got "${data.routingMode}"`,
         path: ["routingMode"]
       });
     }
@@ -400,13 +401,14 @@ export const GenerationManifestSchema = z
 
       // 1. Profile / Engine must match reference-directed H3
       const isRef2vProfile =
-        (data.renderProfile === "MINIMAX_H3_720P_5S_REF2V_V1" &&
+        ((data.renderProfile === "MINIMAX_H3_720P_5S_REF2V_V1" ||
+          data.renderProfile === "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1") &&
           data.engine === "minimax_h3_ref2v") ||
         (data.renderProfile.startsWith("H3_CANDIDATE_") && data.engine === "minimax_h3_ref2v");
       if (!isRef2vProfile) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: `routingMode "reference_directed" requires profile "MINIMAX_H3_720P_5S_REF2V_V1" or H3 candidate (engine "minimax_h3_ref2v"), got profile "${data.renderProfile}" / engine "${data.engine}"`,
+          message: `routingMode "reference_directed" requires profile "MINIMAX_H3_720P_5S_REF2V_V1", "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1", or H3 candidate (engine "minimax_h3_ref2v"), got profile "${data.renderProfile}" / engine "${data.engine}"`,
           path: ["renderProfile"]
         });
       }

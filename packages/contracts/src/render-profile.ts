@@ -10,7 +10,8 @@ export const RenderProfileKeySchema = z.enum([
   "FLUX_SCHNELL_STORYBOARD_V1",
   "LTX_25_720P_5S_I2V_V1",
   "MINIMAX_H3_720P_5S_I2V_V1",
-  "MINIMAX_H3_720P_5S_REF2V_V1"
+  "MINIMAX_H3_720P_5S_REF2V_V1",
+  "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1"
 ]);
 export type RenderProfileKey = z.infer<typeof RenderProfileKeySchema>;
 
@@ -154,13 +155,39 @@ export const MinimaxH3Ref2vRenderProfileSchema = z.object({
 });
 export type MinimaxH3Ref2vRenderProfile = z.infer<typeof MinimaxH3Ref2vRenderProfileSchema>;
 
+export const MinimaxH3Ref2vTurbo4RenderProfileSchema = z.object({
+  key: z.literal("MINIMAX_H3_720P_5S_REF2V_TURBO4_V1"),
+  version: z.literal(1),
+  engine: z.literal("minimax_h3_ref2v"),
+  workflowHash: sha256HashSchema,
+  modelHashes: z.record(z.string(), sha256HashSchema),
+  frames: z.literal(124),
+  steps: z.literal(4),
+  runnerProfile: z.string().min(1),
+  measuredPeakVramMb: z.number().int().positive(),
+  measuredTotalDurationMs: z.number().int().positive(),
+  measuredSamplingDurationMs: z.number().int().positive().nullable(),
+  measuredDiskFootprintGb: z.number().positive().finite(),
+  measuredPeakHostRamMb: z.number().int().nonnegative().nullable(),
+  measuredPeakProcessRssMb: z.number().int().nonnegative().nullable(),
+  measuredSwapUsedMb: z.number().int().nonnegative().nullable(),
+  measuredMajorPageFaults: z.number().int().nonnegative().nullable(),
+  minFreeDiskGb: z.number().positive().finite(),
+  maxConcurrentGpuJobs: z.number().int().positive(),
+  requiresModelOffloading: z.boolean()
+});
+export type MinimaxH3Ref2vTurbo4RenderProfile = z.infer<
+  typeof MinimaxH3Ref2vTurbo4RenderProfileSchema
+>;
+
 export const RenderProfileSchema = z.discriminatedUnion("key", [
   LtxRenderProfileSchema,
   FluxSchnellRenderProfileSchema,
   FluxSchnellStoryboardRenderProfileSchema,
   LtxI2vRenderProfileSchema,
   MinimaxH3I2vRenderProfileSchema,
-  MinimaxH3Ref2vRenderProfileSchema
+  MinimaxH3Ref2vRenderProfileSchema,
+  MinimaxH3Ref2vTurbo4RenderProfileSchema
 ]);
 export type RenderProfile = z.infer<typeof RenderProfileSchema>;
 
@@ -454,6 +481,9 @@ export const MINIMAX_H3_720P_5S_REF2V_V1_INJECTION_TOPOLOGY: ProfileInjectionTop
     ])
   });
 
+export const MINIMAX_H3_720P_5S_REF2V_TURBO4_V1_INJECTION_TOPOLOGY: ProfileInjectionTopology =
+  MINIMAX_H3_720P_5S_REF2V_V1_INJECTION_TOPOLOGY;
+
 export const FLUX_SCHNELL_DRAFT_V1_INJECTION_TOPOLOGY: ProfileInjectionTopology = Object.freeze({
   prompt: Object.freeze({ nodeId: "3", classType: "CLIPTextEncode", inputField: "text" }),
   negativePrompt: Object.freeze({ nodeId: "4", classType: "CLIPTextEncode", inputField: "text" }),
@@ -513,6 +543,13 @@ export function getProfileInjectionTopology(
     return MINIMAX_H3_720P_5S_REF2V_V1_INJECTION_TOPOLOGY;
   }
   if (
+    normalized === "minimax_h3_720p_5s_ref2v_turbo4_v1" ||
+    normalized === "minimax-h3-720p-5s-ref2v-turbo4-v1" ||
+    normalized === "minimax-h3-720p-124f-ref2v-turbo4"
+  ) {
+    return MINIMAX_H3_720P_5S_REF2V_TURBO4_V1_INJECTION_TOPOLOGY;
+  }
+  if (
     normalized === "flux_schnell_draft_v1" ||
     normalized === "flux-schnell-draft" ||
     normalized === "flux_schnell"
@@ -547,7 +584,9 @@ export const RENDER_PROFILE_ALIASES: Readonly<Record<string, RenderProfileKey>> 
   "minimax-h3-i2v": "MINIMAX_H3_720P_5S_I2V_V1",
   "minimax-h3-720p-124f-ref2v": "MINIMAX_H3_720P_5S_REF2V_V1",
   "minimax-h3-720p-5s-ref2v-v1": "MINIMAX_H3_720P_5S_REF2V_V1",
-  minimax_h3_ref2v: "MINIMAX_H3_720P_5S_REF2V_V1"
+  minimax_h3_ref2v: "MINIMAX_H3_720P_5S_REF2V_V1",
+  "minimax-h3-720p-124f-ref2v-turbo4": "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1",
+  "minimax-h3-720p-5s-ref2v-turbo4-v1": "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1"
 });
 
 export function isProfileCertified(profile: RenderProfile): boolean {

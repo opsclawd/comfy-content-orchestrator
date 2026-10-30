@@ -601,7 +601,9 @@ export function validateInjectedPayload(
   const isRef2v =
     profile?.engine === "minimax_h3_ref2v" ||
     profile?.renderProfileIdentity?.key === "MINIMAX_H3_720P_5S_REF2V_V1" ||
+    profile?.renderProfileIdentity?.key === "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1" ||
     profile?.id === "minimax-h3-720p-124f-ref2v" ||
+    profile?.id === "minimax-h3-720p-124f-ref2v-turbo4" ||
     releasedCapability?.route === "ref2v";
 
   const isH3I2v =
@@ -795,6 +797,7 @@ export function validateInjectedPayload(
     const isMinimax =
       profileKey === "MINIMAX_H3_720P_5S_I2V_V1" ||
       profileKey === "MINIMAX_H3_720P_5S_REF2V_V1" ||
+      profileKey === "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1" ||
       (typeof profileKey === "string" &&
         (profileKey.toLowerCase().includes("minimax") ||
           profileKey.startsWith("H3_") ||
@@ -3689,7 +3692,9 @@ export function createCertifiedRenderJobExecutor(
     const isRef2v =
       profile.engine === "minimax_h3_ref2v" ||
       profile.renderProfileIdentity.key === "MINIMAX_H3_720P_5S_REF2V_V1" ||
+      profile.renderProfileIdentity.key === "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1" ||
       profile.id === "minimax-h3-720p-124f-ref2v" ||
+      profile.id === "minimax-h3-720p-124f-ref2v-turbo4" ||
       resolvedReleaseSpecification?.route === "ref2v";
 
     const isH3I2v =

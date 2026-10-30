@@ -626,21 +626,44 @@ export async function runCertificationCli(
       customNodes
     };
   } else if (profile.engine === "minimax_h3_ref2v") {
-    workloadIdentity = {
-      profileId: "minimax-h3-720p-124f-ref2v",
-      renderProfileKey: (profile.renderProfileIdentity?.key ??
-        "MINIMAX_H3_720P_5S_REF2V_V1") as "MINIMAX_H3_720P_5S_REF2V_V1",
-      renderProfileVersion: 1,
-      engine: "minimax_h3_ref2v",
-      width: 1344,
-      height: 768,
-      frames: 124,
-      steps: 20,
-      workflowSha256: liveProvenance.workflow.sha256,
-      modelSha256: modelSha256Map,
-      comfyUiCommit: liveProvenance.git.comfyUiCommit,
-      customNodes
-    };
+    if (profile.id === "minimax-h3-720p-124f-ref2v-turbo4") {
+      workloadIdentity = {
+        profileId: "minimax-h3-720p-124f-ref2v-turbo4",
+        renderProfileKey: (profile.renderProfileIdentity?.key ??
+          "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1") as "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1",
+        renderProfileVersion: 1,
+        engine: "minimax_h3_ref2v",
+        width: 1344,
+        height: 768,
+        frames: 124,
+        steps: 4,
+        workflowSha256: liveProvenance.workflow.sha256,
+        modelSha256: modelSha256Map,
+        comfyUiCommit: liveProvenance.git.comfyUiCommit,
+        customNodes
+      };
+    } else if (profile.id === "minimax-h3-720p-124f-ref2v") {
+      workloadIdentity = {
+        profileId: "minimax-h3-720p-124f-ref2v",
+        renderProfileKey: (profile.renderProfileIdentity?.key ??
+          "MINIMAX_H3_720P_5S_REF2V_V1") as "MINIMAX_H3_720P_5S_REF2V_V1",
+        renderProfileVersion: 1,
+        engine: "minimax_h3_ref2v",
+        width: 1344,
+        height: 768,
+        frames: 124,
+        steps: 20,
+        workflowSha256: liveProvenance.workflow.sha256,
+        modelSha256: modelSha256Map,
+        comfyUiCommit: liveProvenance.git.comfyUiCommit,
+        customNodes
+      };
+    } else {
+      stderr(
+        `[certify] Unsupported certification profile id for minimax_h3_ref2v: "${profile.id}"`
+      );
+      return 1;
+    }
   } else {
     stderr(`[certify] Unsupported certification profile engine: "${profile.engine}"`);
     return 1;

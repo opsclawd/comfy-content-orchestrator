@@ -7,6 +7,10 @@ export const MINIMAX_H3_I2V_PRODUCTION_WORKFLOW_TEMPLATE = "minimax-h3-720p-124f
 export const MINIMAX_H3_I2V_PRODUCTION_RENDER_PROFILE_KEY = "MINIMAX_H3_720P_5S_I2V_V1";
 export const MINIMAX_H3_REF2V_PRODUCTION_WORKFLOW_TEMPLATE = "minimax-h3-720p-124f-ref2v";
 export const MINIMAX_H3_REF2V_PRODUCTION_RENDER_PROFILE_KEY = "MINIMAX_H3_720P_5S_REF2V_V1";
+export const MINIMAX_H3_REF2V_TURBO4_PRODUCTION_WORKFLOW_TEMPLATE =
+  "minimax-h3-720p-124f-ref2v-turbo4";
+export const MINIMAX_H3_REF2V_TURBO4_PRODUCTION_RENDER_PROFILE_KEY =
+  "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1";
 
 export const PRODUCTION_WORKFLOW_TEMPLATE = LTX_I2V_PRODUCTION_WORKFLOW_TEMPLATE;
 export const PRODUCTION_RENDER_PROFILE_KEY = LTX_I2V_PRODUCTION_RENDER_PROFILE_KEY;
@@ -27,6 +31,10 @@ export const ACCEPTED_PRODUCTION_ENGINE_PROFILE_IDS: ReadonlySet<string> = new S
   "minimax_h3_720p_5s_ref2v_v1",
   "minimax-h3-720p-124f-ref2v",
   "minimax-h3-720p-5s-ref2v-v1",
+  "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1",
+  "minimax_h3_720p_5s_ref2v_turbo4_v1",
+  "minimax-h3-720p-124f-ref2v-turbo4",
+  "minimax-h3-720p-5s-ref2v-turbo4-v1",
   "minimax_h3_ref2v",
   "minimax_h3",
   "minimax-h3",

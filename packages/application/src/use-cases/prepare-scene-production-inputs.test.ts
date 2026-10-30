@@ -9,11 +9,15 @@ import {
   type ReferenceAssetId,
   type SceneId,
   type SceneReferenceBinding,
-  type ShotPlanId
+  type ShotPlanId,
+  type StoryboardCandidate
 } from "@cco/domain";
 import { InMemoryJobQueue } from "../test-support/in-memory-job-queue.js";
 import { InMemorySceneUnitOfWork } from "../test-support/in-memory-scene-unit-of-work.js";
-import { PrepareSceneProductionInputsUseCase } from "./prepare-scene-production-inputs.js";
+import {
+  PrepareSceneProductionInputsUseCase,
+  resolveRef2vProductionProfileFromEngineProfileId
+} from "./prepare-scene-production-inputs.js";
 import { StaleBibleBindingMismatchError } from "./plan-shot-plans-errors.js";
 
 describe("PrepareSceneProductionInputsUseCase - Campaign Reference Bible Integration", () => {
@@ -105,14 +109,19 @@ describe("PrepareSceneProductionInputsUseCase - Campaign Reference Bible Integra
     });
   }
 
-  function createTestScene(id: string, shotPlanId: string): Scene {
+  function createTestScene(
+    id: string,
+    shotPlanId: string,
+    engineProfileId: string = "MINIMAX_H3_720P_5S_REF2V_V1",
+    routingMode: "reference_directed" | "frame_anchored" = "reference_directed"
+  ): Scene {
     const scene = Scene.create({
       id: id as SceneId,
       campaignId,
       configuration: {
         prompt: "A bride stands on a dramatic beach at sunset",
         referenceIds: [brideAssetId, beachAssetId],
-        engineProfileId: "MINIMAX_H3_720P_5S_REF2V_V1",
+        engineProfileId,
         durationMs: 5000
       }
     });
@@ -124,7 +133,7 @@ describe("PrepareSceneProductionInputsUseCase - Campaign Reference Bible Integra
     scene.approveShotPlan({
       approvedBy: "Director Dave",
       approvedAt: new Date().toISOString(),
-      routingMode: "reference_directed"
+      routingMode
     });
 
     return scene;
@@ -371,5 +380,238 @@ describe("PrepareSceneProductionInputsUseCase - Campaign Reference Bible Integra
 
     expect(result.readiness).toBe("blocked");
     expect(result.blockers.some((b) => b.code === "STALE_BIBLE_BINDING_MISMATCH")).toBe(true);
+  });
+
+  describe("Ref2V Turbo4 Profile Selection & Route Fence", () => {
+    it("resolveRef2vProductionProfileFromEngineProfileId correctly resolves turbo4 and falls back to base-20", () => {
+      expect(
+        resolveRef2vProductionProfileFromEngineProfileId("MINIMAX_H3_720P_5S_REF2V_TURBO4_V1")
+      ).toEqual({
+        renderProfileKey: "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1",
+        workflowTemplate: "minimax-h3-720p-124f-ref2v-turbo4"
+      });
+
+      expect(
+        resolveRef2vProductionProfileFromEngineProfileId("minimax-h3-720p-124f-ref2v-turbo4")
+      ).toEqual({
+        renderProfileKey: "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1",
+        workflowTemplate: "minimax-h3-720p-124f-ref2v-turbo4"
+      });
+
+      expect(
+        resolveRef2vProductionProfileFromEngineProfileId("minimax-h3-720p-5s-ref2v-turbo4-v1")
+      ).toEqual({
+        renderProfileKey: "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1",
+        workflowTemplate: "minimax-h3-720p-124f-ref2v-turbo4"
+      });
+
+      expect(
+        resolveRef2vProductionProfileFromEngineProfileId("MINIMAX_H3_720P_5S_REF2V_V1")
+      ).toEqual({
+        renderProfileKey: "MINIMAX_H3_720P_5S_REF2V_V1",
+        workflowTemplate: "minimax-h3-720p-124f-ref2v"
+      });
+
+      expect(resolveRef2vProductionProfileFromEngineProfileId("MINIMAX_H3_720P_5S_I2V_V1")).toEqual(
+        {
+          renderProfileKey: "MINIMAX_H3_720P_5S_REF2V_V1",
+          workflowTemplate: "minimax-h3-720p-124f-ref2v"
+        }
+      );
+
+      expect(resolveRef2vProductionProfileFromEngineProfileId(undefined)).toEqual({
+        renderProfileKey: "MINIMAX_H3_720P_5S_REF2V_V1",
+        workflowTemplate: "minimax-h3-720p-124f-ref2v"
+      });
+    });
+
+    it("prepares production inputs with MINIMAX_H3_720P_5S_REF2V_TURBO4_V1 when scene engineProfileId is turbo", async () => {
+      const sceneId = "01928374-abcd-7000-8000-000000000001";
+      const plan = createTestShotPlan(sceneId, "sp-turbo-1");
+      const scene = createTestScene(
+        sceneId,
+        plan.id,
+        "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1",
+        "reference_directed"
+      );
+
+      const binding: SceneReferenceBinding = {
+        sceneId: scene.id,
+        specRevision: 1,
+        referenceAssetId: brideAssetId,
+        role: "subject_identity",
+        weight: 1
+      };
+
+      const queue = new InMemoryJobQueue();
+      const uow = new InMemorySceneUnitOfWork([scene]).withJobs(queue);
+      uow.seedCampaign(validCampaign);
+      uow.seedShotPlan(plan);
+      uow.seedReferenceAsset(brideAsset);
+      uow.seedSceneBinding(binding);
+
+      uow.seedCampaignReferenceBible({
+        campaignId,
+        referenceAssetId: brideAssetId,
+        role: "subject_identity",
+        description: authoritativeBrideDescription,
+        biblePromptTag: "<Picture 1>",
+        sourceContentHashSha256: validHashBride,
+        createdAt: "2026-08-15T00:00:00.000Z",
+        updatedAt: "2026-08-15T00:00:00.000Z"
+      });
+
+      const objectStorage = {
+        getObject: vi.fn().mockResolvedValue({ body: brideBytes }),
+        putObject: vi.fn(),
+        copyObject: vi.fn(),
+        deleteObject: vi.fn(),
+        headObject: vi.fn()
+      };
+      const hashBytes = {
+        hashBytes: vi.fn().mockResolvedValue(validHashBride)
+      };
+
+      const useCase = new PrepareSceneProductionInputsUseCase(uow, { objectStorage, hashBytes });
+
+      const result = await useCase.execute({ sceneId: scene.id });
+
+      expect(result.readiness).toBe("ready");
+      expect(result.inspection.route.renderProfileKey).toBe("MINIMAX_H3_720P_5S_REF2V_TURBO4_V1");
+      expect(result.inspection.route.workflowTemplate).toBe("minimax-h3-720p-124f-ref2v-turbo4");
+    });
+
+    it("prepares production inputs with base-20 Ref2V when scene engineProfileId is default MINIMAX_H3_720P_5S_I2V_V1", async () => {
+      const sceneId = "01928374-abcd-7000-8000-000000000001";
+      const plan = createTestShotPlan(sceneId, "sp-base-1");
+      const scene = createTestScene(
+        sceneId,
+        plan.id,
+        "MINIMAX_H3_720P_5S_I2V_V1",
+        "reference_directed"
+      );
+
+      const binding: SceneReferenceBinding = {
+        sceneId: scene.id,
+        specRevision: 1,
+        referenceAssetId: brideAssetId,
+        role: "subject_identity",
+        weight: 1
+      };
+
+      const queue = new InMemoryJobQueue();
+      const uow = new InMemorySceneUnitOfWork([scene]).withJobs(queue);
+      uow.seedCampaign(validCampaign);
+      uow.seedShotPlan(plan);
+      uow.seedReferenceAsset(brideAsset);
+      uow.seedSceneBinding(binding);
+
+      uow.seedCampaignReferenceBible({
+        campaignId,
+        referenceAssetId: brideAssetId,
+        role: "subject_identity",
+        description: authoritativeBrideDescription,
+        biblePromptTag: "<Picture 1>",
+        sourceContentHashSha256: validHashBride,
+        createdAt: "2026-08-15T00:00:00.000Z",
+        updatedAt: "2026-08-15T00:00:00.000Z"
+      });
+
+      const objectStorage = {
+        getObject: vi.fn().mockResolvedValue({ body: brideBytes }),
+        putObject: vi.fn(),
+        copyObject: vi.fn(),
+        deleteObject: vi.fn(),
+        headObject: vi.fn()
+      };
+      const hashBytes = {
+        hashBytes: vi.fn().mockResolvedValue(validHashBride)
+      };
+
+      const useCase = new PrepareSceneProductionInputsUseCase(uow, { objectStorage, hashBytes });
+
+      const result = await useCase.execute({ sceneId: scene.id });
+
+      expect(result.readiness).toBe("ready");
+      expect(result.inspection.route.renderProfileKey).toBe("MINIMAX_H3_720P_5S_REF2V_V1");
+      expect(result.inspection.route.workflowTemplate).toBe("minimax-h3-720p-124f-ref2v");
+    });
+
+    it("route fence: enforces I2V when routingMode is frame_anchored even if engineProfileId is turbo", async () => {
+      const sceneId = "01928374-abcd-7000-8000-000000000001";
+      const plan = ShotPlan.create({
+        id: "sp-anchor-1" as ShotPlanId,
+        sceneId: sceneId as SceneId,
+        specRevision: 1,
+        variantOrdinal: 1,
+        status: "approved",
+        routingMode: "frame_anchored",
+        targetDurationMs: 5000,
+        targetFrameCount: 124,
+        framing: "medium",
+        angle: "eye_level",
+        lensIntent: "50mm prime",
+        cameraPosition: "eye level tripod",
+        cameraMovement: "static",
+        movementSpeed: "slow",
+        cameraPromptDescription: "Medium eye-level shot",
+        actionSummary: "Character anchored shot",
+        lightingStyle: "natural_golden_hour",
+        environmentDescription: "Scenic setting",
+        continuity: {
+          incomingContinuityFromSceneId: null,
+          persistentSubjectIds: [],
+          lightingContinuityNote: null,
+          frameAnchorTarget: "first_frame",
+          anchorCandidateId: "cand-1",
+          anchorMediaHashSha256: validHashBride
+        },
+        beats: []
+      });
+
+      const scene = createTestScene(
+        sceneId,
+        plan.id,
+        "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1",
+        "frame_anchored"
+      );
+
+      const candidate: StoryboardCandidate = {
+        id: "cand-1" as CandidateId,
+        sceneId: scene.id,
+        specRevision: 1,
+        variantOrdinal: 1,
+        storageBucket: "assets",
+        storageObjectKey: "candidates/cand-1.png",
+        contentHash: validHashBride,
+        generationMetadata: {},
+        createdAt: new Date().toISOString()
+      };
+
+      const queue = new InMemoryJobQueue();
+      const uow = new InMemorySceneUnitOfWork([scene], [candidate]).withJobs(queue);
+      uow.seedCampaign(validCampaign);
+      uow.seedShotPlan(plan);
+
+      const objectStorage = {
+        getObject: vi.fn().mockResolvedValue({ body: brideBytes }),
+        putObject: vi.fn(),
+        copyObject: vi.fn(),
+        deleteObject: vi.fn(),
+        headObject: vi.fn()
+      };
+      const hashBytes = {
+        hashBytes: vi.fn().mockResolvedValue(validHashBride)
+      };
+
+      const useCase = new PrepareSceneProductionInputsUseCase(uow, { objectStorage, hashBytes });
+
+      const result = await useCase.execute({ sceneId: scene.id });
+
+      expect(result.readiness).toBe("ready");
+      // Route fence keeps frame_anchored on I2V
+      expect(result.inspection.route.renderProfileKey).toBe("MINIMAX_H3_720P_5S_I2V_V1");
+      expect(result.inspection.route.workflowTemplate).toBe("minimax-h3-720p-124f-i2v");
+    });
   });
 });

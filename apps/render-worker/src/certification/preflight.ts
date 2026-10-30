@@ -99,7 +99,11 @@ function verifyProfileWorkload(profile: CertificationProfile): void {
       `Invalid profile engine "${profile.engine}": expected "minimax_h3_i2v"`
     );
   }
-  if (profile.id === "minimax-h3-720p-124f-ref2v" && profile.engine !== "minimax_h3_ref2v") {
+  if (
+    (profile.id === "minimax-h3-720p-124f-ref2v" ||
+      profile.id === "minimax-h3-720p-124f-ref2v-turbo4") &&
+    profile.engine !== "minimax_h3_ref2v"
+  ) {
     throw new PreflightError(
       `Invalid profile engine "${profile.engine}": expected "minimax_h3_ref2v"`
     );
@@ -353,9 +357,12 @@ function verifyProfileWorkload(profile: CertificationProfile): void {
       );
     }
   } else if (profile.engine === "minimax_h3_ref2v") {
-    if (profile.id !== "minimax-h3-720p-124f-ref2v") {
+    if (
+      profile.id !== "minimax-h3-720p-124f-ref2v" &&
+      profile.id !== "minimax-h3-720p-124f-ref2v-turbo4"
+    ) {
       throw new PreflightError(
-        `Invalid profile ID "${profile.id}": expected "minimax-h3-720p-124f-ref2v"`
+        `Invalid profile ID "${profile.id}": expected "minimax-h3-720p-124f-ref2v" or "minimax-h3-720p-124f-ref2v-turbo4"`
       );
     }
     if (profile.baseline.width !== 1344) {
@@ -373,27 +380,34 @@ function verifyProfileWorkload(profile: CertificationProfile): void {
         `Invalid baseline frames ${String(profile.baseline.frames)}: expected 124`
       );
     }
-    if (profile.baseline.steps !== 20) {
+
+    const isTurbo = profile.id === "minimax-h3-720p-124f-ref2v-turbo4";
+    const expectedSteps = isTurbo ? 4 : 20;
+    const expectedKey = isTurbo
+      ? "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1"
+      : "MINIMAX_H3_720P_5S_REF2V_V1";
+
+    if (profile.baseline.steps !== expectedSteps) {
       throw new PreflightError(
-        `Invalid baseline steps ${String(profile.baseline.steps)}: expected 20`
+        `Invalid baseline steps ${String(profile.baseline.steps)}: expected ${expectedSteps}`
       );
     }
     if (
       profile.renderProfileIdentity === null ||
-      profile.renderProfileIdentity.key !== "MINIMAX_H3_720P_5S_REF2V_V1" ||
+      profile.renderProfileIdentity.key !== expectedKey ||
       profile.renderProfileIdentity.version !== 1
     ) {
       throw new PreflightError(
-        `Invalid renderProfileIdentity: expected key "MINIMAX_H3_720P_5S_REF2V_V1" version 1`
+        `Invalid renderProfileIdentity: expected key "${expectedKey}" version 1`
       );
     }
     const assertions = profile.assertions;
     if (!Array.isArray(assertions) || assertions.length === 0) {
       throw new PreflightError(`Profile "${profile.id}" must define workflow assertions`);
     }
-    if (!assertions.find((a) => a.input === "steps" && a.equals === 20)) {
+    if (!assertions.find((a) => a.input === "steps" && a.equals === expectedSteps)) {
       throw new PreflightError(
-        `Profile "${profile.id}" is missing required workflow assertion for steps = 20`
+        `Profile "${profile.id}" is missing required workflow assertion for steps = ${expectedSteps}`
       );
     }
     if (!assertions.find((a) => a.input === "width" && a.equals === 1344)) {
@@ -412,6 +426,40 @@ function verifyProfileWorkload(profile: CertificationProfile): void {
       throw new PreflightError(
         `Profile "${profile.id}" is missing required workflow assertion for frames/length = 124`
       );
+    }
+    if (isTurbo) {
+      const hasLoraModel = profile.models.some(
+        (m) =>
+          m.category === "loras" &&
+          m.relativePath === "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors"
+      );
+      if (!hasLoraModel) {
+        throw new PreflightError(
+          `Profile "${profile.id}" must declare LoRA model "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors"`
+        );
+      }
+      if (
+        !assertions.find(
+          (a) =>
+            a.classType === "LoraLoaderModelOnly" &&
+            a.input === "lora_name" &&
+            a.equals === "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors"
+        )
+      ) {
+        throw new PreflightError(
+          `Profile "${profile.id}" is missing required workflow assertion for lora_name`
+        );
+      }
+      if (
+        !assertions.find(
+          (a) =>
+            a.classType === "LoraLoaderModelOnly" && a.input === "strength_model" && a.equals === 1
+        )
+      ) {
+        throw new PreflightError(
+          `Profile "${profile.id}" is missing required workflow assertion for strength_model = 1`
+        );
+      }
     }
   }
 }
@@ -485,7 +533,8 @@ function validateApprovedReportEntry(
       rpp.key !== "FLUX_SCHNELL_DRAFT_V1" &&
       rpp.key !== "FLUX_SCHNELL_STORYBOARD_V1" &&
       rpp.key !== "MINIMAX_H3_720P_5S_I2V_V1" &&
-      rpp.key !== "MINIMAX_H3_720P_5S_REF2V_V1") ||
+      rpp.key !== "MINIMAX_H3_720P_5S_REF2V_V1" &&
+      rpp.key !== "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1") ||
     rpp.version !== 1
   ) {
     throw new PreflightError(

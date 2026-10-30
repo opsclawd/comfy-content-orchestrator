@@ -8,6 +8,7 @@ import {
   LtxI2vRenderProfileSchema,
   MinimaxH3I2vRenderProfileSchema,
   MinimaxH3Ref2vRenderProfileSchema,
+  MinimaxH3Ref2vTurbo4RenderProfileSchema,
   RenderProfileKeySchema,
   FluxSchnellStoryboardRenderProfileSchema,
   FLUX_SCHNELL_STORYBOARD_V1_INJECTION_TOPOLOGY,
@@ -18,6 +19,7 @@ import {
   MINIMAX_H3_720P_5S_I2V_V1_INJECTION_TOPOLOGY,
   MINIMAX_H3_720P_5S_REF2V_V1_PROFILE,
   MINIMAX_H3_720P_5S_REF2V_V1_INJECTION_TOPOLOGY,
+  MINIMAX_H3_720P_5S_REF2V_TURBO4_V1_INJECTION_TOPOLOGY,
   getProfileInjectionTopology,
   isProfileCertified,
   LTX_FPS,
@@ -134,6 +136,12 @@ describe("RenderProfileSchema", () => {
     expect(RenderProfileKeySchema.parse("LTX_25_720P_5S_I2V_V1")).toBe("LTX_25_720P_5S_I2V_V1");
     expect(RenderProfileKeySchema.parse("MINIMAX_H3_720P_5S_I2V_V1")).toBe(
       "MINIMAX_H3_720P_5S_I2V_V1"
+    );
+    expect(RenderProfileKeySchema.parse("MINIMAX_H3_720P_5S_REF2V_V1")).toBe(
+      "MINIMAX_H3_720P_5S_REF2V_V1"
+    );
+    expect(RenderProfileKeySchema.parse("MINIMAX_H3_720P_5S_REF2V_TURBO4_V1")).toBe(
+      "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1"
     );
     expect(() => RenderProfileKeySchema.parse("UNKNOWN_PROFILE_KEY")).toThrow();
   });
@@ -584,6 +592,66 @@ describe("RenderProfileSchema", () => {
       expect(getProfileInjectionTopology("minimax-h3-720p-124f-ref2v")).toEqual(topology);
       expect(getProfileInjectionTopology("minimax-h3-720p-5s-ref2v-v1")).toEqual(topology);
       expect(getProfileInjectionTopology("minimax_h3_ref2v")).toEqual(topology);
+    });
+
+    it("verifies MiniMax-H3 Ref2V Turbo4 profile contract and injection topology", () => {
+      const measuredTurbo4Fixture = {
+        key: "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1" as const,
+        version: 1 as const,
+        engine: "minimax_h3_ref2v" as const,
+        workflowHash: "e".repeat(64),
+        modelHashes: {
+          diffusion: "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779",
+          textEncoder: "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6",
+          videoVae: "52a2c8c73583c86e4f41cdcce3a6ad0ea562987bc0bf3d60a0cef5f5c8e60c0e",
+          audioVae: "8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48",
+          lora: "a".repeat(64)
+        },
+        frames: 124 as const,
+        steps: 4 as const,
+        runnerProfile: "dynamicvram-offload-v1",
+        measuredPeakVramMb: 21500,
+        measuredTotalDurationMs: 150000,
+        measuredSamplingDurationMs: null,
+        measuredDiskFootprintGb: 40.5,
+        measuredPeakHostRamMb: null,
+        measuredPeakProcessRssMb: null,
+        measuredSwapUsedMb: null,
+        measuredMajorPageFaults: null,
+        minFreeDiskGb: 50,
+        maxConcurrentGpuJobs: 1,
+        requiresModelOffloading: true
+      };
+
+      const parsedTurbo = MinimaxH3Ref2vTurbo4RenderProfileSchema.parse(measuredTurbo4Fixture);
+      expect(parsedTurbo).toEqual(measuredTurbo4Fixture);
+      expect(RenderProfileSchema.parse(measuredTurbo4Fixture)).toEqual(measuredTurbo4Fixture);
+
+      // Rejects wrong step count
+      expect(() =>
+        MinimaxH3Ref2vTurbo4RenderProfileSchema.parse({
+          ...measuredTurbo4Fixture,
+          steps: 20
+        })
+      ).toThrow();
+
+      // Injection topology checks
+      const topology = getProfileInjectionTopology("MINIMAX_H3_720P_5S_REF2V_TURBO4_V1");
+      expect(topology).toBeDefined();
+      expect(topology).toEqual(MINIMAX_H3_720P_5S_REF2V_TURBO4_V1_INJECTION_TOPOLOGY);
+      expect(topology).toEqual(MINIMAX_H3_720P_5S_REF2V_V1_INJECTION_TOPOLOGY);
+
+      // Aliases
+      expect(getProfileInjectionTopology("minimax-h3-720p-124f-ref2v-turbo4")).toEqual(topology);
+      expect(getProfileInjectionTopology("minimax-h3-720p-5s-ref2v-turbo4-v1")).toEqual(topology);
+      expect(getProfileInjectionTopology("minimax_h3_720p_5s_ref2v_turbo4_v1")).toEqual(topology);
+
+      expect(RENDER_PROFILE_ALIASES["minimax-h3-720p-124f-ref2v-turbo4"]).toBe(
+        "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1"
+      );
+      expect(RENDER_PROFILE_ALIASES["minimax-h3-720p-5s-ref2v-turbo4-v1"]).toBe(
+        "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1"
+      );
     });
 
     it("returns undefined for unknown profile keys", () => {

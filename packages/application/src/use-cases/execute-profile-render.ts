@@ -125,6 +125,7 @@ function validateIdentity(identity: unknown): asserts identity is ProfileRenderI
     identity.renderProfileKey === "LTX_25_720P_5S_I2V_V1" ||
     identity.renderProfileKey === "MINIMAX_H3_720P_5S_I2V_V1" ||
     identity.renderProfileKey === "MINIMAX_H3_720P_5S_REF2V_V1" ||
+    identity.renderProfileKey === "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1" ||
     isCandidateKey ||
     isReleaseKey;
   if (!validProfileKey) {
@@ -148,7 +149,8 @@ function validateIdentity(identity: unknown): asserts identity is ProfileRenderI
           ? "ltx_25_i2v"
           : identity.renderProfileKey === "MINIMAX_H3_720P_5S_I2V_V1"
             ? "minimax_h3_i2v"
-            : identity.renderProfileKey === "MINIMAX_H3_720P_5S_REF2V_V1"
+            : identity.renderProfileKey === "MINIMAX_H3_720P_5S_REF2V_V1" ||
+                identity.renderProfileKey === "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1"
               ? "minimax_h3_ref2v"
               : "flux_schnell";
     if (identity.engine !== expectedEngine) {

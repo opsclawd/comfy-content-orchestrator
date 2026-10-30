@@ -58,6 +58,16 @@
       "notes": "Approved following successful hardware certification on Trinidad RTX 4090 host (minimax-ref2v-cert-run-001 through 005). Operating entity satisfies open-weights community terms, acceptable use policies, and attribution requirements. Deployment runs on dedicated RTX 4090 render host."
     },
     {
+      "componentId": "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1",
+      "componentType": "model",
+      "versionOrRevision": "1",
+      "status": "review_required",
+      "licenseId": "MiniMax Community License; Apache-2.0 (LoRA adapter)",
+      "licenseSource": "https://huggingface.co/Comfy-Org/MiniMax-H3/blob/main/README.md; https://huggingface.co/lightx2v/Minimax-h3-Turbo (HF commit 3ec17a324ced54151364f24f8b5fb6bf7e26414f)",
+      "policyRevision": "2026-08-29.1",
+      "notes": "Pending human legal/governance review for the opt-in Ref2V turbo profile added by #481. No attestation of license-term compliance has been made; license routing fails closed (EnforceLicenseRouting rejects any status other than 'approved') until a human reviews this entry, sets status to 'approved', and records reviewedAt/approver themselves."
+    },
+    {
       "componentId": "ltx-25-720p-97f-i2v",
       "componentType": "model",
       "versionOrRevision": "1",
