@@ -294,6 +294,9 @@ export function isMiniMaxEngineOrProfile(engineOrProfile?: string | undefined): 
     normalized === "minimax_h3_720p_5s_ref2v_v1" ||
     normalized === "minimax-h3-720p-5s-ref2v-v1" ||
     normalized === "minimax-h3-720p-124f-ref2v" ||
+    normalized === "minimax_h3_720p_5s_ref2v_turbo4_v1" ||
+    normalized === "minimax-h3-720p-5s-ref2v-turbo4-v1" ||
+    normalized === "minimax-h3-720p-124f-ref2v-turbo4" ||
     normalized === "minimax-h3-720p@certified-v1" ||
     normalized.startsWith("h3_candidate_") ||
     normalized.startsWith("h3_release_")

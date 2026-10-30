@@ -1,9 +1,10 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { loadCertificationProfile } from "./profile-manifest.js";
+import { hashWorkflow } from "./hasher.js";
 
 describe("Certification Profile Manifest", () => {
   let tempDir: string;
@@ -279,6 +280,32 @@ describe("Certification Profile Manifest", () => {
     expect(profile.baseline.steps).toBe(8);
     expect(profile.minFreeDiskGb).toBe(100);
     expect(profile.runnerProfile).toBe("dynamicvram-offload-v1");
+  });
+
+  it("loads the real repository templates manifest with minimax-h3-720p-124f-ref2v-turbo4 and verifies workflow hash", async () => {
+    const templatesManifestPath = fileURLToPath(
+      new URL("../../../../../templates/provenance.json", import.meta.url)
+    );
+    const profile = await loadCertificationProfile(
+      templatesManifestPath,
+      "minimax-h3-720p-124f-ref2v-turbo4"
+    );
+
+    expect(profile.id).toBe("minimax-h3-720p-124f-ref2v-turbo4");
+    expect(profile.engine).toBe("minimax_h3_ref2v");
+    expect(profile.source.kind).toBe("authored_from_spec");
+    expect(profile.renderProfileIdentity).toEqual({
+      key: "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1",
+      version: 1
+    });
+    expect(profile.workflowRelativePath).toBe("minimax_h3_720p_ref2v_turbo4_124f_api.json");
+    expect(profile.baseline.frames).toBe(124);
+    expect(profile.baseline.steps).toBe(4);
+    expect(profile.minFreeDiskGb).toBe(50);
+    expect(profile.runnerProfile).toBe("dynamicvram-offload-v1");
+
+    const workflowContent = await readFile(profile.workflowPath, "utf8");
+    expect(hashWorkflow(workflowContent)).toBe(profile.expectedWorkflowHash);
   });
 
   it("loads the real repository templates manifest with flux_schnell_storyboard_v1 and historical flux-schnell-draft", async () => {

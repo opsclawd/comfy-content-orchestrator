@@ -708,6 +708,73 @@ describe("EnqueueSceneProductionRenderUseCase", () => {
     expect("approvedCandidateId" in result.job.injectedPayload).toBe(false);
   });
 
+  it("enqueues turbo Ref2V production render with minimax-h3-720p-124f-ref2v-turbo4 when scene engineProfileId is turbo", async () => {
+    const shotPlan = createApprovedShotPlan("scene-ref2v-turbo-happy", {
+      routingMode: "reference_directed"
+    });
+    const scene = createApprovedSceneWithShotPlan("scene-ref2v-turbo-happy", shotPlan, {
+      engineProfileId: "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1"
+    });
+
+    const refAsset: ReferenceAsset = {
+      id: "ref-asset-turbo-happy" as ReferenceAssetId,
+      clientId: "client-1",
+      storageBucket: "assets",
+      storageObjectKey: "refs/prod.png",
+      contentHashSha256: "hash-prod-1",
+      mimeType: "image/png",
+      assetType: "image"
+    };
+    const binding: SceneReferenceBinding = {
+      sceneId: scene.id,
+      specRevision: 1,
+      referenceAssetId: refAsset.id,
+      role: "product",
+      weight: 1
+    };
+
+    const queue = new InMemoryJobQueue();
+    const uow = new InMemorySceneUnitOfWork([scene]).withJobs(queue);
+    uow.seedCampaign(validCampaign);
+    uow.seedShotPlan(shotPlan);
+    uow.seedReferenceAsset(refAsset);
+    uow.seedSceneBinding(binding);
+    uow.seedCampaignReferenceBible({
+      campaignId: validCampaign.id,
+      referenceAssetId: refAsset.id,
+      role: "subject_identity",
+      description: "Default subject description",
+      biblePromptTag: "<Picture 1>",
+      sourceContentHashSha256: refAsset.contentHashSha256,
+      createdAt: "2026-08-15T00:00:00.000Z",
+      updatedAt: "2026-08-15T00:00:00.000Z"
+    });
+
+    const objectStorage = {
+      getObject: vi.fn().mockResolvedValue({ body: validPngBytes }),
+      putObject: vi.fn(),
+      copyObject: vi.fn(),
+      deleteObject: vi.fn(),
+      headObject: vi.fn()
+    };
+    const hashBytes = {
+      hashBytes: vi.fn().mockResolvedValue(refAsset.contentHashSha256)
+    };
+
+    const useCase = new EnqueueSceneProductionRenderUseCase(uow, {
+      objectStorage,
+      hashBytes
+    });
+    const result = await useCase.execute({ sceneId: "scene-ref2v-turbo-happy" });
+
+    expect(result.scene.status).toBe("queued");
+    expect(result.job.workflowTemplate).toBe("minimax-h3-720p-124f-ref2v-turbo4");
+    expect(result.job.injectedPayload.shotPlanId).toBe(shotPlan.id);
+    expect(result.job.injectedPayload.specRevision).toBe(1);
+    expect(result.job.injectedPayload.frameCount).toBe(124);
+    expect("approvedCandidateId" in result.job.injectedPayload).toBe(false);
+  });
+
   it("reference-directed H3 validates storage bytes and hash when objectStorage option is provided", async () => {
     const shotPlan = createApprovedShotPlan("scene-storage-verify", {
       routingMode: "reference_directed"

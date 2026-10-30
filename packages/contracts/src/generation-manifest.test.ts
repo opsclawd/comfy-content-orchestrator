@@ -317,6 +317,14 @@ describe("GenerationManifestSchema", () => {
     };
     expect(GenerationManifestSchema.safeParse(invalidManifest).success).toBe(false);
 
+    const invalidTurboManifest = {
+      ...baseManifestFixture,
+      renderProfile: "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1",
+      engine: "minimax_h3_ref2v",
+      routingMode: undefined
+    };
+    expect(GenerationManifestSchema.safeParse(invalidTurboManifest).success).toBe(false);
+
     const invalidWithFrameAnchored = {
       ...baseManifestFixture,
       renderProfile: "MINIMAX_H3_720P_5S_REF2V_V1",
@@ -331,6 +339,30 @@ describe("GenerationManifestSchema", () => {
       }
     };
     expect(GenerationManifestSchema.safeParse(invalidWithFrameAnchored).success).toBe(false);
+  });
+
+  it("validates a reference_directed manifest using MINIMAX_H3_720P_5S_REF2V_TURBO4_V1", () => {
+    const validTurboManifest: GenerationManifest = {
+      ...baseManifestFixture,
+      renderProfile: "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1",
+      sampling: {
+        ...baseManifestFixture.sampling,
+        steps: 4
+      },
+      routingMode: "reference_directed",
+      shotPlan: {
+        id: "11111111-1111-4111-8111-111111111111",
+        specRevision: 2
+      },
+      executedInstruction: {
+        text: "Compiled shot instruction with 0 pictures",
+        sha256: "2222222222222222222222222222222222222222222222222222222222222222",
+        byteLength: 40
+      },
+      referenceImages: []
+    };
+    const parsed = GenerationManifestSchema.safeParse(validTurboManifest);
+    expect(parsed.success).toBe(true);
   });
 
   it("fails closed when attemptId is missing in reference_directed mode", () => {

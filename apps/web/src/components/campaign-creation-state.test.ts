@@ -3,6 +3,8 @@ import {
   buildRequestFromForm,
   computeClientRequestFingerprint,
   createInitialState,
+  isMinimaxH3EngineProfileId,
+  isMinimaxH3TurboEngineProfileId,
   omitIfBlank,
   transitionCampaignCreationState,
   MIN_SCENE_COUNT,
@@ -66,7 +68,50 @@ describe("campaign creation state machine & form mapping", () => {
     });
   });
 
+  describe("MiniMax-H3 engine profile helpers", () => {
+    it("isMinimaxH3EngineProfileId recognizes base and turbo profile keys and aliases", () => {
+      expect(isMinimaxH3EngineProfileId("MINIMAX_H3_720P_5S_I2V_V1")).toBe(true);
+      expect(isMinimaxH3EngineProfileId("minimax-h3")).toBe(true);
+      expect(isMinimaxH3EngineProfileId("MINIMAX_H3_720P_5S_REF2V_V1")).toBe(true);
+      expect(isMinimaxH3EngineProfileId("MINIMAX_H3_720P_5S_REF2V_TURBO4_V1")).toBe(true);
+      expect(isMinimaxH3EngineProfileId("minimax-h3-720p-124f-ref2v-turbo4")).toBe(true);
+      expect(isMinimaxH3EngineProfileId("minimax-unknown-future-profile")).toBe(false);
+
+      expect(isMinimaxH3EngineProfileId("LTX_25_720P_5S_V1")).toBe(false);
+      expect(isMinimaxH3EngineProfileId("FLUX_SCHNELL_DRAFT_V1")).toBe(false);
+      expect(isMinimaxH3EngineProfileId(undefined)).toBe(false);
+      expect(isMinimaxH3EngineProfileId(null)).toBe(false);
+    });
+
+    it("isMinimaxH3TurboEngineProfileId recognizes turbo profile keys and aliases", () => {
+      expect(isMinimaxH3TurboEngineProfileId("MINIMAX_H3_720P_5S_REF2V_TURBO4_V1")).toBe(true);
+      expect(isMinimaxH3TurboEngineProfileId("minimax-h3-720p-124f-ref2v-turbo4")).toBe(true);
+      expect(isMinimaxH3TurboEngineProfileId("minimax_future_turbo_profile")).toBe(false);
+
+      expect(isMinimaxH3TurboEngineProfileId("MINIMAX_H3_720P_5S_I2V_V1")).toBe(false);
+      expect(isMinimaxH3TurboEngineProfileId("minimax-h3")).toBe(false);
+      expect(isMinimaxH3TurboEngineProfileId("MINIMAX_H3_720P_5S_REF2V_V1")).toBe(false);
+      expect(isMinimaxH3TurboEngineProfileId("LTX_25_720P_5S_V1")).toBe(false);
+      expect(isMinimaxH3TurboEngineProfileId(undefined)).toBe(false);
+      expect(isMinimaxH3TurboEngineProfileId(null)).toBe(false);
+    });
+  });
+
   describe("buildRequestFromForm", () => {
+    it("handles MINIMAX_H3_720P_5S_REF2V_TURBO4_V1 and conforms to PlanCampaignStoryboardRequestSchema", () => {
+      const values: CampaignCreationFormValues = {
+        ...validFormValues,
+        targetEngineProfileId: "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1"
+      };
+
+      const result = buildRequestFromForm(values, dummyIdempotencyKey);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+
+      expect(result.request.targetEngineProfileId).toBe("MINIMAX_H3_720P_5S_REF2V_TURBO4_V1");
+      const parsed = PlanCampaignStoryboardRequestSchema.safeParse(result.request);
+      expect(parsed.success).toBe(true);
+    });
     it("Auto mode omits sceneCountOverride key entirely", () => {
       const result = buildRequestFromForm(validFormValues, dummyIdempotencyKey);
       expect(result.ok).toBe(true);

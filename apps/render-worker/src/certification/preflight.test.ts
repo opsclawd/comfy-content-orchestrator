@@ -1610,6 +1610,183 @@ describe("apps/render-worker/src/certification/preflight", () => {
       ).not.toThrow();
     });
 
+    it("verifies and accepts a valid minimax-h3-720p-124f-ref2v-turbo4 profile", () => {
+      const turbo4Profile: CertificationProfile = {
+        id: "minimax-h3-720p-124f-ref2v-turbo4",
+        engine: "minimax_h3_ref2v",
+        workflowPath: "/home/gary/workflows/minimax_h3_720p_ref2v_turbo4_124f_api.json",
+        workflowRelativePath: "minimax_h3_720p_ref2v_turbo4_124f_api.json",
+        expectedWorkflowHash: "8".repeat(64),
+        source: {
+          kind: "authored_from_spec",
+          uri: "https://github.com/comfyanonymous/ComfyUI",
+          revision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+          license: "GPL-3.0"
+        },
+        baseline: {
+          width: 1344,
+          height: 768,
+          frames: 124,
+          steps: 4,
+          approximateDurationSeconds: 5
+        },
+        minFreeDiskGb: 50,
+        runnerProfile: "dynamicvram-offload-v1",
+        models: [
+          {
+            category: "diffusion_models",
+            relativePath: "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
+          },
+          {
+            category: "loras",
+            relativePath: "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors"
+          }
+        ],
+        assertions: [
+          { nodeId: "9", classType: "BasicScheduler", input: "steps", equals: 4 },
+          {
+            nodeId: "301",
+            classType: "LoraLoaderModelOnly",
+            input: "lora_name",
+            equals: "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors"
+          },
+          {
+            nodeId: "301",
+            classType: "LoraLoaderModelOnly",
+            input: "strength_model",
+            equals: 1
+          },
+          { nodeId: "105", classType: "MiniMaxH3ReferenceToVideo", input: "width", equals: 1344 },
+          { nodeId: "105", classType: "MiniMaxH3ReferenceToVideo", input: "height", equals: 768 },
+          { nodeId: "105", classType: "MiniMaxH3ReferenceToVideo", input: "length", equals: 124 }
+        ],
+        renderProfileIdentity: {
+          key: "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1",
+          version: 1
+        }
+      };
+
+      const approved = {
+        version: 1,
+        profileId: "minimax-h3-720p-124f-ref2v-turbo4",
+        workflow: {
+          sha256: "8".repeat(64),
+          source: {
+            kind: "validated_host_export",
+            revision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+            uri: "https://github.com/comfyanonymous/ComfyUI",
+            license: "GPL-3.0"
+          }
+        },
+        renderProfileProvenance: {
+          key: "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1",
+          version: 1,
+          engine: "minimax_h3_ref2v",
+          frames: 124,
+          steps: 4,
+          workflowHash: "8".repeat(64),
+          modelHashes: {
+            "models/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors": "d".repeat(
+              64
+            ),
+            "models/loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors": "e".repeat(
+              64
+            )
+          }
+        }
+      };
+
+      const live: CertificationProvenanceReport = {
+        version: 1,
+        profileId: "minimax-h3-720p-124f-ref2v-turbo4",
+        generatedAt: "2026-10-29T00:00:00.000Z",
+        workflow: {
+          relativePath: "minimax_h3_720p_ref2v_turbo4_124f_api.json",
+          sha256: "8".repeat(64),
+          source: {
+            kind: "authored_from_spec",
+            revision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+            uri: "https://github.com/comfyanonymous/ComfyUI",
+            license: "GPL-3.0"
+          }
+        },
+        models: [
+          {
+            category: "diffusion_models",
+            relativePath: "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+            key: "models/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+            bytes: 1000,
+            sha256: "d".repeat(64)
+          },
+          {
+            category: "loras",
+            relativePath: "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+            key: "models/loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+            bytes: 500,
+            sha256: "e".repeat(64)
+          }
+        ],
+        git: {
+          comfyUiCommit: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+          customNodes: []
+        },
+        disk: {
+          modelFootprintBytes: 1500,
+          availableBytes: 100_000_000_000,
+          requiredFreeBytes: 50_000_000_000,
+          modelFootprintGb: 1.5,
+          availableGb: 100,
+          minFreeDiskGb: 50,
+          passes: true
+        },
+        renderProfileProvenance: {
+          key: "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1",
+          version: 1,
+          engine: "minimax_h3_ref2v",
+          frames: 124,
+          steps: 4,
+          workflowHash: "8".repeat(64),
+          runnerProfile: "dynamicvram-offload-v1",
+          measuredDiskFootprintGb: 1.5,
+          minFreeDiskGb: 50,
+          modelHashes: {
+            "models/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors": "d".repeat(
+              64
+            ),
+            "models/loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors": "e".repeat(
+              64
+            )
+          }
+        }
+      };
+
+      expect(() =>
+        verifyGoldMasterProvenance({
+          approved,
+          live,
+          profile: turbo4Profile
+        })
+      ).not.toThrow();
+
+      // Negative check: missing lora model in profile fails preflight
+      const invalidProfileWithoutLora: CertificationProfile = {
+        ...turbo4Profile,
+        models: [
+          {
+            category: "diffusion_models",
+            relativePath: "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
+          }
+        ]
+      };
+      expect(() =>
+        verifyGoldMasterProvenance({
+          approved,
+          live,
+          profile: invalidProfileWithoutLora
+        })
+      ).toThrow("must declare LoRA model");
+    });
+
     it("verifies and accepts a valid flux_schnell_storyboard_v1 profile", () => {
       const storyboardProfile: CertificationProfile = {
         id: "flux_schnell_storyboard_v1",

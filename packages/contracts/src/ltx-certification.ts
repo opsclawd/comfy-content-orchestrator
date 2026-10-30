@@ -187,7 +187,7 @@ export const MinimaxH3WorkloadIdentitySchema = z.object({
 });
 export type MinimaxH3WorkloadIdentity = z.infer<typeof MinimaxH3WorkloadIdentitySchema>;
 
-export const MinimaxH3Ref2vWorkloadIdentitySchema = z.object({
+export const MinimaxH3Ref2vBaseWorkloadIdentitySchema = z.object({
   profileId: z.literal("minimax-h3-720p-124f-ref2v"),
   renderProfileKey: z.literal("MINIMAX_H3_720P_5S_REF2V_V1"),
   renderProfileVersion: z.literal(1),
@@ -201,6 +201,32 @@ export const MinimaxH3Ref2vWorkloadIdentitySchema = z.object({
   comfyUiCommit: gitCommitHashSchema,
   customNodes: z.array(CustomNodeIdentitySchema)
 });
+export type MinimaxH3Ref2vBaseWorkloadIdentity = z.infer<
+  typeof MinimaxH3Ref2vBaseWorkloadIdentitySchema
+>;
+
+export const MinimaxH3Ref2vTurbo4WorkloadIdentitySchema = z.object({
+  profileId: z.literal("minimax-h3-720p-124f-ref2v-turbo4"),
+  renderProfileKey: z.literal("MINIMAX_H3_720P_5S_REF2V_TURBO4_V1"),
+  renderProfileVersion: z.literal(1),
+  engine: z.literal("minimax_h3_ref2v"),
+  width: z.literal(1344),
+  height: z.literal(768),
+  frames: z.literal(124),
+  steps: z.literal(4),
+  workflowSha256: sha256HashSchema,
+  modelSha256: z.record(z.string().min(1), sha256HashSchema),
+  comfyUiCommit: gitCommitHashSchema,
+  customNodes: z.array(CustomNodeIdentitySchema)
+});
+export type MinimaxH3Ref2vTurbo4WorkloadIdentity = z.infer<
+  typeof MinimaxH3Ref2vTurbo4WorkloadIdentitySchema
+>;
+
+export const MinimaxH3Ref2vWorkloadIdentitySchema = z.union([
+  MinimaxH3Ref2vBaseWorkloadIdentitySchema,
+  MinimaxH3Ref2vTurbo4WorkloadIdentitySchema
+]);
 export type MinimaxH3Ref2vWorkloadIdentity = z.infer<typeof MinimaxH3Ref2vWorkloadIdentitySchema>;
 
 export const CertificationWorkloadIdentitySchema = z.union([
