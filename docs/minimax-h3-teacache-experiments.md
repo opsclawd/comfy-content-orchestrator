@@ -233,7 +233,9 @@ ln -s "$EXISTING_MODELS_ROOT/vae/"* "$COMFYUI_ISOLATED_DIR/models/vae/"
 "$CCO_REPO_ROOT/scripts/check-minimax-h3-version.sh" --comfy-dir "$COMFYUI_ISOLATED_DIR"
 
 # 4. Stage hardened TeaCache custom node into isolated custom_nodes directory and verify file hashes
-mkdir -p "$COMFYUI_ISOLATED_DIR/custom_nodes/cco-minimax-h3-teacache"
+mkdir -p "$COMFYUI_ISOLATED_DIR/custom_nodes/cco-minimax-h3-teacache/locks"
+cp "$CCO_REPO_ROOT/experiments/minimax-h3-teacache/locks/requirements-teacache-cu124.txt" \
+   "$COMFYUI_ISOLATED_DIR/custom_nodes/cco-minimax-h3-teacache/locks/"
 cp "$CCO_REPO_ROOT/experiments/minimax-h3-teacache/__init__.py" \
    "$CCO_REPO_ROOT/experiments/minimax-h3-teacache/nodes.py" \
    "$CCO_REPO_ROOT/experiments/minimax-h3-teacache/teacache.py" \
@@ -242,6 +244,16 @@ cp "$CCO_REPO_ROOT/experiments/minimax-h3-teacache/__init__.py" \
 # Verify staged file SHA-256 matches pinned in-tree adapter file hashes
 sha256sum "$COMFYUI_ISOLATED_DIR/custom_nodes/cco-minimax-h3-teacache/"*
 ```
+
+Adapter resolution is strictly scoped to the target ComfyUI `custom_nodes/` directory:
+there is no repository-relative, cwd-relative, or hardcoded-path fallback, and a symlinked
+package pointing outside `custom_nodes/` is rejected (stage by copying). Pre-submit, the
+capability handshake must report a verified `teacacheAdapterIdentity` whose digest matches
+the request, all three adapter files' hashes, the node's `INPUT_TYPES()` signature hash, the
+pinned core source hashes (commit `55b6a9b`: H3 nodes, model_patcher, samplers, model_base,
+custom sampler, sampler_helpers, minimax model) and the staged dependency-lock hash. A
+locally patched core checkout will be blocked. Candidate and matched-control runs share
+every check.
 
 ### Step 2: Catalog Inspection
 Verify that TeaCache entries are recognized in the experiment catalog:

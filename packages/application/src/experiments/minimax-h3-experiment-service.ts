@@ -59,6 +59,12 @@ import {
   TEACACHE_UPSTREAM_COMMIT,
   TEACACHE_ADAPTER_VERSION,
   TEACACHE_LOCAL_ADAPTER_FILE_HASHES,
+  TEACACHE_PINNED_CORE_SOURCE_HASHES,
+  TEACACHE_STAGED_PACKAGE_DIR,
+  TEACACHE_DEPENDENCY_LOCK_RELATIVE_PATH,
+  TEACACHE_DEPENDENCY_LOCK_SHA256,
+  TEACACHE_NODE_INPUT_SIGNATURE_HASH,
+  TEACACHE_NODE_KEY,
   TEACACHE_LOCAL_ADAPTER_DIGEST,
   computeLocalTeaCacheAdapterDigest,
   validateTeaCacheParameters,
@@ -76,7 +82,10 @@ import {
   validateAttentionTopology
 } from "./minimax-h3-attention-topology.js";
 import { deriveTeaCacheGraph, validateTeaCacheTopology } from "./minimax-h3-teacache-topology.js";
-import { getTeaCacheCatalogEntry } from "./minimax-h3-teacache-catalog.js";
+import {
+  getTeaCacheCatalogEntry,
+  teaCacheCatalogVariantForMode
+} from "./minimax-h3-teacache-catalog.js";
 import { reduceTeaCacheObservation } from "./minimax-h3-teacache-reducer.js";
 import {
   parseAttentionEvidence,
@@ -405,7 +414,16 @@ export function deriveExperimentGraph({
   return derivedGraph;
 }
 
-function validateCapabilityHandshake(
+function isPathWithin(child: string, root: string): boolean {
+  const normChild = normalize(child);
+  const normRoot = normalize(root);
+  // A plain startsWith admits sibling directories sharing the root's name as
+  // a prefix; require the match to land on the root or one separator inside it.
+  return normChild === normRoot || normChild.startsWith(normRoot + sep);
+}
+
+/** @internal exported for focused unit tests */
+export function validateCapabilityHandshake(
   handshake: MinimaxH3CapabilityHandshake,
   options: {
     descV2: MinimaxH3ExperimentDescriptorV2;
@@ -518,6 +536,31 @@ function validateCapabilityHandshake(
         );
       }
     }
+    if (reqNode.moduleFileHashes) {
+      for (const [fileName, expectedHash] of Object.entries(reqNode.moduleFileHashes)) {
+        const observed = regNode.packageFileHashes?.[fileName];
+        if (!observed) {
+          conflicts.push(
+            `required node "${reqNode.name}" lacks packageFileHashes["${fileName}"] in child process handshake`
+          );
+        } else if (observed !== expectedHash) {
+          conflicts.push(
+            `required node "${reqNode.name}" package file "${fileName}" hash mismatch: expected ${expectedHash}, got ${observed}`
+          );
+        }
+      }
+    }
+    if (reqNode.expectedInputSignatureHash) {
+      if (!regNode.inputSignatureHash) {
+        conflicts.push(
+          `required node "${reqNode.name}" lacks inputSignatureHash in child process handshake`
+        );
+      } else if (regNode.inputSignatureHash !== reqNode.expectedInputSignatureHash) {
+        conflicts.push(
+          `required node "${reqNode.name}" input signature hash mismatch: expected ${reqNode.expectedInputSignatureHash}, got ${regNode.inputSignatureHash}`
+        );
+      }
+    }
     if (options.comfyUiDir && regNode.sourceFile) {
       const normSource = normalize(regNode.sourceFile);
       const normCheckout = normalize(options.comfyUiDir);
@@ -526,10 +569,45 @@ function validateCapabilityHandshake(
       // "/x/comfy-evil/node.py"). Require the match to land exactly on the
       // checkout path or one path-separator boundary inside it (AC-3,
       // F-e35ea06e).
-      const isContained = normSource === normCheckout || normSource.startsWith(normCheckout + sep);
+      const isContained = isPathWithin(normSource, normCheckout);
       if (isAbsolute(normSource) && !isContained) {
         conflicts.push(
           `node "${reqNode.name}" source file "${normSource}" is outside the audited checkout "${normCheckout}"`
+        );
+      }
+    }
+  }
+
+  // Pre-submit TeaCache adapter provenance (candidate and matched control alike).
+  if (descV2.teacacheRequest) {
+    const identity = handshake.teacacheAdapterIdentity;
+    if (!identity) {
+      conflicts.push(
+        "TeaCache request present but child handshake reports no resolved TeaCache adapter"
+      );
+    } else {
+      if (identity.verified !== true) {
+        conflicts.push(
+          `TeaCache adapter identity is not verified in child process${
+            identity.reason ? `: ${identity.reason}` : ""
+          }`
+        );
+      }
+      if (!identity.observedDigest) {
+        conflicts.push("TeaCache adapter identity lacks observedDigest in child handshake");
+      } else if (identity.observedDigest !== descV2.teacacheRequest.adapterDigest) {
+        conflicts.push(
+          `TeaCache adapter digest mismatch: expected ${descV2.teacacheRequest.adapterDigest}, got ${identity.observedDigest}`
+        );
+      }
+      if (!identity.packageDir) {
+        conflicts.push("TeaCache adapter identity lacks packageDir; containment cannot be proven");
+      } else if (
+        options.comfyUiDir &&
+        !isPathWithin(identity.packageDir, normalize(options.comfyUiDir))
+      ) {
+        conflicts.push(
+          `TeaCache adapter package "${identity.packageDir}" is outside the audited checkout "${normalize(options.comfyUiDir)}"`
         );
       }
     }
@@ -1128,6 +1206,18 @@ export class MinimaxH3ExperimentService {
         observedHashes[fName] = actual;
       }
       localAdapterDigest = computeLocalTeaCacheAdapterDigest(observedHashes);
+      const lockPath = resolve(adapterDir, TEACACHE_DEPENDENCY_LOCK_RELATIVE_PATH);
+      if (!existsSync(lockPath)) {
+        throw new Error(`TeaCache dependency lock not found at ${lockPath}`);
+      }
+      const lockActual = createHash("sha256")
+        .update(await readFile(lockPath))
+        .digest("hex");
+      if (lockActual !== TEACACHE_DEPENDENCY_LOCK_SHA256) {
+        throw new Error(
+          `TeaCache dependency lock hash mismatch: expected ${TEACACHE_DEPENDENCY_LOCK_SHA256}, computed ${lockActual}`
+        );
+      }
     }
 
     if (samplingRecipe) {
@@ -1763,6 +1853,14 @@ export class MinimaxH3ExperimentService {
 
       const teaCacheRequiredRuntime: MinimaxH3RequiredRuntimeManifest = {
         ...baseRequiredRuntime,
+        // TeaCache pins go last so a live env measurement merged into
+        // baseRequiredRuntime can never overwrite a pinned core/lock hash.
+        sourceFileHashes: {
+          ...baseRequiredRuntime.sourceFileHashes,
+          ...TEACACHE_PINNED_CORE_SOURCE_HASHES,
+          [`${TEACACHE_STAGED_PACKAGE_DIR}/${TEACACHE_DEPENDENCY_LOCK_RELATIVE_PATH}`]:
+            TEACACHE_DEPENDENCY_LOCK_SHA256
+        },
         requiredNodes: [
           ...baseRequiredRuntime.requiredNodes,
           // moduleHash is required (not merely optional) here so
@@ -1771,8 +1869,10 @@ export class MinimaxH3ExperimentService {
           // instead of only trusting that a node named "CCOMiniMaxH3TeaCache"
           // registered at all.
           {
-            name: "CCOMiniMaxH3TeaCache",
-            moduleHash: TEACACHE_LOCAL_ADAPTER_FILE_HASHES["nodes.py"]
+            name: TEACACHE_NODE_KEY,
+            moduleHash: TEACACHE_LOCAL_ADAPTER_FILE_HASHES["nodes.py"],
+            moduleFileHashes: { ...TEACACHE_LOCAL_ADAPTER_FILE_HASHES },
+            expectedInputSignatureHash: TEACACHE_NODE_INPUT_SIGNATURE_HASH
           }
         ]
       };
@@ -2798,7 +2898,7 @@ export class MinimaxH3ExperimentService {
         let expectedCatalogEntry: MinimaxH3TeaCacheCatalogEntry | undefined;
         try {
           expectedCatalogEntry = getTeaCacheCatalogEntry(
-            isControl ? "matched-control" : "teacache-raw-l1",
+            teaCacheCatalogVariantForMode(descV2.teacacheRequest.mode),
             descriptor.route
           );
           if (descV2.teacacheRequest.catalogDigest !== expectedCatalogEntry.catalogDigest) {
@@ -2835,6 +2935,23 @@ export class MinimaxH3ExperimentService {
             );
           }
           observedAdapterHashes[fName] = actual;
+        }
+        const repoLockPath = resolve(
+          process.cwd(),
+          "experiments/minimax-h3-teacache",
+          TEACACHE_DEPENDENCY_LOCK_RELATIVE_PATH
+        );
+        if (!existsSync(repoLockPath)) {
+          errors.push(`TeaCache dependency lock not found at ${repoLockPath}`);
+        } else {
+          const lockActual = createHash("sha256")
+            .update(await readFile(repoLockPath))
+            .digest("hex");
+          if (lockActual !== TEACACHE_DEPENDENCY_LOCK_SHA256) {
+            errors.push(
+              `TeaCache dependency lock hash mismatch: expected ${TEACACHE_DEPENDENCY_LOCK_SHA256}, computed ${lockActual}`
+            );
+          }
         }
         const computedAdapterDigest = computeLocalTeaCacheAdapterDigest(observedAdapterHashes);
         if (computedAdapterDigest !== descV2.teacacheRequest.adapterDigest) {
@@ -3341,7 +3458,10 @@ export class MinimaxH3ExperimentService {
     }
 
     if (descV2?.teacacheRequest) {
-      const entry = getTeaCacheCatalogEntry("teacache-raw-l1", descriptor.route);
+      const entry = getTeaCacheCatalogEntry(
+        teaCacheCatalogVariantForMode(descV2.teacacheRequest.mode),
+        descriptor.route
+      );
       if (!entry.runnable) {
         executionBlocked = true;
         executionBlockers.push(
@@ -5468,7 +5588,10 @@ export class MinimaxH3ExperimentService {
       }
 
       if (descV2.teacacheRequest) {
-        const entry = getTeaCacheCatalogEntry("teacache-raw-l1", descV2.route);
+        const entry = getTeaCacheCatalogEntry(
+          teaCacheCatalogVariantForMode(descV2.teacacheRequest.mode),
+          descV2.route
+        );
         if (entry && !entry.runnable) {
           await writePreflightBlocker(
             `TeaCache variant "${entry.variantName}" is non-runnable in catalog: ${entry.blockers.join("; ")}`,

@@ -1,5 +1,5 @@
 import { mkdtemp, mkdir, rm } from "node:fs/promises";
-import { writeFileSync, readFileSync, existsSync } from "node:fs";
+import { writeFileSync, readFileSync, existsSync, mkdirSync, copyFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -287,6 +287,23 @@ class VedaPatch:
       teacacheSession?: string;
       summary?: { mode?: string; forwardCalls?: number; cacheHits?: number; totalSteps?: number };
     };
+  }
+
+  // Stage the pinned adapter into <testDir>/custom_nodes (testDir is the
+  // target ComfyUI root: the bootstrap entrypoint lives there). Resolution is
+  // strictly scoped to this directory.
+  function stageTeaCacheAdapter(): string {
+    const dest = join(testDir, "custom_nodes", "cco-minimax-h3-teacache");
+    mkdirSync(join(dest, "locks"), { recursive: true });
+    const src = resolve("experiments/minimax-h3-teacache");
+    for (const f of ["__init__.py", "nodes.py", "teacache.py"]) {
+      copyFileSync(join(src, f), join(dest, f));
+    }
+    copyFileSync(
+      join(src, "locks/requirements-teacache-cu124.txt"),
+      join(dest, "locks/requirements-teacache-cu124.txt")
+    );
+    return dest;
   }
 
   function runCollectorWithScript(
@@ -1677,12 +1694,12 @@ print("SAMPLER_CLASSMETHOD_AND_CALLBACK_OK")
 
     it("drives a real TeaCache session through the SamplerCustomAdvanced hook end-to-end (issue #467)", async () => {
       setupSamplerAndConditioningMocks();
-      const teaCacheDir = resolve("experiments/minimax-h3-teacache");
+      const teaCacheDir = stageTeaCacheAdapter();
 
       const script = `
 import sys
 sys.path.insert(0, ${JSON.stringify(teaCacheDir)})
-import teacache  # pre-import so _resolve_teacache_module's sys.path fallback finds this exact, pinned module
+import teacache  # pre-import the adapter staged inside the target custom_nodes (the only place resolution looks)
 
 import comfy_extras.nodes_custom_sampler as custom_sampler
 
@@ -1756,7 +1773,7 @@ print("TEACACHE_SAMPLER_HOOK_OK")
 
     it("restores diffusion_model.forward and the sampling-step buffer when TeaCache session setup itself raises (issue #467)", async () => {
       setupSamplerAndConditioningMocks();
-      const teaCacheDir = resolve("experiments/minimax-h3-teacache");
+      const teaCacheDir = stageTeaCacheAdapter();
 
       // A rejected unallowlisted threshold makes TeaCacheSession's
       // constructor raise -- this happens inside the single setup/execute

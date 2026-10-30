@@ -1222,7 +1222,9 @@ export const MinimaxH3RequiredRuntimeManifestSchema = z
         .object({
           name: z.string().min(1),
           revision: z.string().optional(),
-          moduleHash: sha256HashSchema.optional()
+          moduleHash: sha256HashSchema.optional(),
+          moduleFileHashes: z.record(z.string().min(1), sha256HashSchema).optional(),
+          expectedInputSignatureHash: sha256HashSchema.optional()
         })
         .strict()
     ),
