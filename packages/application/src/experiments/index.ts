@@ -11,3 +11,6 @@ export * from "./minimax-h3-attention-reducer.js";
 export * from "./minimax-h3-step-reduction-catalog.js";
 export * from "./minimax-h3-step-reduction-compiler.js";
 export * from "./minimax-h3-continuity-study.js";
+export * from "./fasth3-omni-reference-mapper.js";
+export * from "./fasth3-omni-compiler.js";
+export * from "./fasth3-omni-preparation-service.js";

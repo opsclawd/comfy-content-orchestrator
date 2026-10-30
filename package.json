@@ -15,6 +15,7 @@
     "certify:minimax-h3": "pnpm --filter render-worker certify:minimax-h3",
     "certify:transition-soak": "pnpm --filter render-worker certify:transition-soak",
     "experiment:minimax-h3": "pnpm --filter render-worker experiment:minimax-h3",
+    "experiment:fasth3-omni": "pnpm --filter render-worker experiment:fasth3-omni",
     "db:migrate": "pnpm --filter @cco/infrastructure db:migrate",
     "format": "prettier --check .",
     "format:fix": "prettier --write .",
