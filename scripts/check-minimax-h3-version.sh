@@ -69,6 +69,12 @@ elif [[ -n "${MINIMAX_H3_MODELS_DIR:-}" && -d "${MINIMAX_H3_MODELS_DIR}" ]]; the
   MODELS_DIR="${MINIMAX_H3_MODELS_DIR}"
 elif [[ -n "${COMFYUI_MODELS_DIR:-}" && -d "${COMFYUI_MODELS_DIR}" ]]; then
   MODELS_DIR="${COMFYUI_MODELS_DIR}"
+elif [[ -n "${CUSTOM_COMFY_DIR}" && -d "${CUSTOM_COMFY_DIR}/models" ]]; then
+  # --comfy-dir was previously parsed but never consulted here, so passing
+  # it alone (without also passing --models-dir) silently fell through to
+  # the repo-relative defaults below instead of the isolated checkout's own
+  # models directory.
+  MODELS_DIR="${CUSTOM_COMFY_DIR}/models"
 elif [[ -n "${COMFYUI_DIR:-}" && -d "${COMFYUI_DIR}/models" ]]; then
   MODELS_DIR="${COMFYUI_DIR}/models"
 elif [[ -d "${REPO_ROOT}/node_modules/.cache/minimax-h3-models" ]]; then

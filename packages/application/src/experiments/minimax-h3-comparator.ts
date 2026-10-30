@@ -3,6 +3,8 @@ import {
   computeInvariantProjectionKey,
   computeAttentionTopologyDigest,
   computeAttentionRuntimeLockDigest,
+  computeTeaCacheTopologyDigest,
+  TEACACHE_ADAPTER_VERSION,
   PINNED_H3_CHECKPOINTS,
   PINNED_COMFYUI_CORE_REVISION,
   type MinimaxH3AnyExperimentDescriptor,
@@ -13,6 +15,9 @@ import {
   type MinimaxH3ExperimentDescriptorV2,
   type MinimaxH3ExperimentResultV2,
   type MinimaxH3AttentionObservation,
+  type MinimaxH3TeaCacheObservation,
+  type MinimaxH3TeaCacheMode,
+  type MinimaxH3TeaCacheRequest,
   type MinimaxH3DenseRegionPolicy,
   type MinimaxH3ObservedProvenance
 } from "@cco/contracts";
@@ -240,6 +245,289 @@ function evaluateAttentionObservationEligibility(params: {
   };
 }
 
+function evaluateTeaCacheObservationEligibility(params: {
+  role: "Baseline" | "Variant";
+  observation: MinimaxH3TeaCacheObservation | undefined | null;
+  mode: MinimaxH3TeaCacheMode;
+  expectedRequest?: MinimaxH3TeaCacheRequest | null | undefined;
+}): ObservationEligibilityEvaluation {
+  const { role, observation: obs, mode, expectedRequest } = params;
+  const reasons: string[] = [];
+
+  if (!obs) {
+    return {
+      valid: false,
+      reasons: [
+        `${role} result lacks verified TeaCache observation evidence. Matched pair comparison requires instrumented telemetry on both runs.`
+      ]
+    };
+  }
+
+  if (mode === "off") {
+    if (obs.mode !== "off") {
+      reasons.push(`${role} expected caching mode "off" but observed "${obs.mode}".`);
+    }
+    if (obs.status !== "verified") {
+      reasons.push(
+        `${role} control observation status was "${obs.status}" (${obs.failureReason ?? "unverified"}).`
+      );
+    }
+    if (obs.cacheHitsRecorded !== null && obs.cacheHitsRecorded > 0) {
+      reasons.push(
+        `${role} observed ${obs.cacheHitsRecorded} cache hits while caching was disabled.`
+      );
+    }
+    if (!obs.coverage?.complete) {
+      reasons.push(`${role} control measurement coverage is incomplete.`);
+    }
+    if (!obs.coverage || obs.coverage.modelForwardsRecorded === null) {
+      reasons.push(`${role} control lacks recorded independent model forwards.`);
+    }
+    if (
+      obs.coverage &&
+      obs.coverage.modelForwardsRecorded !== null &&
+      obs.forwardCallsRecorded !== null &&
+      obs.coverage.modelForwardsRecorded !== obs.forwardCallsRecorded
+    ) {
+      reasons.push(
+        `${role} control modelForwardsRecorded (${obs.coverage.modelForwardsRecorded}) !== forwardCallsRecorded (${obs.forwardCallsRecorded}).`
+      );
+    }
+    if (obs.coverage && obs.coverage.modelForwardsRecorded !== 20) {
+      reasons.push(
+        `${role} control modelForwardsRecorded (${obs.coverage.modelForwardsRecorded}) !== 20.`
+      );
+    }
+    return {
+      valid: reasons.length === 0,
+      reasons
+    };
+  }
+
+  if (obs.forwardCallsRecorded === null || obs.cacheHitsRecorded === null) {
+    reasons.push(`${role} TeaCache forwardCallsRecorded or cacheHitsRecorded is unobserved/null.`);
+  }
+
+  if (!obs.coverage || obs.coverage.modelForwardsRecorded === null) {
+    reasons.push(`${role} lacks recorded independent model forwards.`);
+  }
+
+  if (obs.status === "failed") {
+    reasons.push(`${role} TeaCache execution failed: ${obs.failureReason ?? "unknown failure"}.`);
+  } else if (obs.status === "no_op") {
+    reasons.push(
+      `${role} TeaCache resulted in 0 cache hits (no_op). Timestep caching variant cannot claim speedup without actual cached skips.`
+    );
+  } else if (obs.status !== "verified") {
+    reasons.push(
+      `${role} TeaCache observation status was "${obs.status}" (${obs.failureReason ?? "unverified"}).`
+    );
+  }
+
+  if (obs.cacheHitsRecorded !== null && obs.cacheHitsRecorded === 0) {
+    reasons.push(
+      `${role} observed 0 cache hits. Caching variant cannot claim speedup when no forward passes were skipped.`
+    );
+  }
+
+  if ((obs.nestedForwardsOnHits ?? 0) > 0) {
+    reasons.push(
+      `${role} recorded ${obs.nestedForwardsOnHits} nested forward passes during cache hits. Forward pass was not skipped.`
+    );
+  }
+
+  if (!obs.coverage?.complete) {
+    reasons.push(`${role} TeaCache measurement coverage is incomplete.`);
+  }
+
+  if (
+    obs.coverage &&
+    obs.coverage.modelForwardsRecorded !== null &&
+    obs.forwardCallsRecorded !== null &&
+    obs.coverage.modelForwardsRecorded !== obs.forwardCallsRecorded
+  ) {
+    reasons.push(
+      `${role} TeaCache independent model forwards (${obs.coverage.modelForwardsRecorded}) does not match wrapper forward calls (${obs.forwardCallsRecorded}).`
+    );
+  }
+
+  if (
+    obs.forwardCallsRecorded !== null &&
+    obs.cacheHitsRecorded !== null &&
+    obs.forwardCallsRecorded + obs.cacheHitsRecorded !== obs.totalSteps
+  ) {
+    reasons.push(
+      `${role} TeaCache accounting invariant violated: forwards (${obs.forwardCallsRecorded}) + hits (${obs.cacheHitsRecorded}) !== totalSteps (${obs.totalSteps}).`
+    );
+  }
+
+  if (expectedRequest && expectedRequest.mode === "raw-l1-v1") {
+    if (!obs.effectiveConfig) {
+      reasons.push(`${role} TeaCache effectiveConfig is missing or null.`);
+    } else {
+      if (obs.effectiveConfig.mode !== expectedRequest.mode) {
+        reasons.push(
+          `${role} observed effectiveConfig mode "${obs.effectiveConfig.mode}" !== expected "${expectedRequest.mode}".`
+        );
+      }
+      if (obs.effectiveConfig.relL1Thresh !== expectedRequest.relL1Thresh) {
+        reasons.push(
+          `${role} observed effectiveConfig threshold ${obs.effectiveConfig.relL1Thresh} !== expected ${expectedRequest.relL1Thresh}.`
+        );
+      }
+      // Compare the NORMALIZED window only, not the raw startStep/endStep
+      // spelling -- e.g. endStep=-2 and endStep=18 both resolve to the
+      // identical stopping index (18) under this session's totalSteps=20
+      // convention, so they are equivalent spellings of the same window
+      // and requiring raw equality too would wrongly disqualify a runtime
+      // that reports the absolute form of the window the request gave in
+      // relative form.
+      //
+      // Crucially, every normalized value used here is DERIVED
+      // independently right here, on BOTH the observed and expected
+      // sides, never trusted from the object's own normalizedStartStep/
+      // normalizedEndStep field as reported -- this comparator cannot
+      // assume either side necessarily passed through
+      // reduceTeaCacheObservation or MinimaxH3TeaCacheRequestSchema.parse
+      // (e.g. a stored result read directly off disk by a CLI compare
+      // path may only go through a parse call elsewhere, or none at all),
+      // so an object whose OWN reported raw/normalized pair is internally
+      // inconsistent must still be caught here regardless of which side
+      // it appears on.
+      // Only endStep uses the negative-offset-from-end convention --
+      // startStep (per MinimaxH3TeaCacheConfigSchema) must always be a
+      // non-negative integer. Deriving startStep the same way as endStep
+      // let a negative startStep (e.g. -18) that happens to derive to an
+      // in-bounds value coincidentally agree with its own reported
+      // normalizedStartStep and pass unnoticed.
+      const deriveNormalizedEnd = (raw: number, totalSteps: number): number =>
+        raw < 0 ? totalSteps + raw : raw;
+      const isValidRawStartStep = (raw: number): boolean => Number.isInteger(raw) && raw >= 0;
+      const isValidRawEndStep = (raw: number): boolean => Number.isInteger(raw);
+      if (!isValidRawStartStep(obs.effectiveConfig.startStep)) {
+        reasons.push(
+          `${role} observed effectiveConfig startStep ${obs.effectiveConfig.startStep} must be a non-negative integer (only endStep may use the negative-offset-from-end convention).`
+        );
+      }
+      if (!isValidRawStartStep(expectedRequest.startStep)) {
+        reasons.push(
+          `${role} expected request startStep ${expectedRequest.startStep} must be a non-negative integer (only endStep may use the negative-offset-from-end convention).`
+        );
+      }
+      if (
+        !isValidRawEndStep(obs.effectiveConfig.endStep) ||
+        !isValidRawEndStep(expectedRequest.endStep)
+      ) {
+        reasons.push(
+          `${role} observed effectiveConfig endStep ${obs.effectiveConfig.endStep} or expected request endStep ${expectedRequest.endStep} is not an integer.`
+        );
+      }
+      const obsDerivedStartStep = isValidRawStartStep(obs.effectiveConfig.startStep)
+        ? obs.effectiveConfig.startStep
+        : NaN;
+      const obsDerivedEndStep = isValidRawEndStep(obs.effectiveConfig.endStep)
+        ? deriveNormalizedEnd(obs.effectiveConfig.endStep, obs.effectiveConfig.totalSteps)
+        : NaN;
+      const expectedDerivedStartStep = isValidRawStartStep(expectedRequest.startStep)
+        ? expectedRequest.startStep
+        : NaN;
+      const expectedDerivedEndStep = isValidRawEndStep(expectedRequest.endStep)
+        ? deriveNormalizedEnd(expectedRequest.endStep, expectedRequest.totalSteps)
+        : NaN;
+      if (
+        Number.isFinite(obsDerivedStartStep) &&
+        obs.effectiveConfig.normalizedStartStep !== obsDerivedStartStep
+      ) {
+        reasons.push(
+          `${role} observed effectiveConfig reports an internally inconsistent raw/normalized startStep: startStep=${obs.effectiveConfig.startStep} (totalSteps=${obs.effectiveConfig.totalSteps}) derives to ${obsDerivedStartStep}, but normalizedStartStep=${obs.effectiveConfig.normalizedStartStep} was reported.`
+        );
+      }
+      if (
+        Number.isFinite(obsDerivedEndStep) &&
+        obs.effectiveConfig.normalizedEndStep !== obsDerivedEndStep
+      ) {
+        reasons.push(
+          `${role} observed effectiveConfig reports an internally inconsistent raw/normalized endStep: endStep=${obs.effectiveConfig.endStep} (totalSteps=${obs.effectiveConfig.totalSteps}) derives to ${obsDerivedEndStep}, but normalizedEndStep=${obs.effectiveConfig.normalizedEndStep} was reported.`
+        );
+      }
+      if (
+        Number.isFinite(expectedDerivedStartStep) &&
+        expectedRequest.normalizedStartStep !== expectedDerivedStartStep
+      ) {
+        reasons.push(
+          `${role} expected request reports an internally inconsistent raw/normalized startStep: startStep=${expectedRequest.startStep} (totalSteps=${expectedRequest.totalSteps}) derives to ${expectedDerivedStartStep}, but normalizedStartStep=${expectedRequest.normalizedStartStep} was reported.`
+        );
+      }
+      if (
+        Number.isFinite(expectedDerivedEndStep) &&
+        expectedRequest.normalizedEndStep !== expectedDerivedEndStep
+      ) {
+        reasons.push(
+          `${role} expected request reports an internally inconsistent raw/normalized endStep: endStep=${expectedRequest.endStep} (totalSteps=${expectedRequest.totalSteps}) derives to ${expectedDerivedEndStep}, but normalizedEndStep=${expectedRequest.normalizedEndStep} was reported.`
+        );
+      }
+      const obsWindowInBounds =
+        Number.isFinite(obsDerivedStartStep) &&
+        Number.isFinite(obsDerivedEndStep) &&
+        obsDerivedStartStep >= 2 &&
+        obsDerivedStartStep < obsDerivedEndStep &&
+        obsDerivedEndStep <= 18;
+      if (
+        Number.isFinite(obsDerivedStartStep) &&
+        Number.isFinite(obsDerivedEndStep) &&
+        !obsWindowInBounds
+      ) {
+        reasons.push(
+          `${role} observed effectiveConfig resolved window [${obsDerivedStartStep}, ${obsDerivedEndStep}) must satisfy 2 <= start < end <= 18.`
+        );
+      }
+      const expectedWindowInBounds =
+        Number.isFinite(expectedDerivedStartStep) &&
+        Number.isFinite(expectedDerivedEndStep) &&
+        expectedDerivedStartStep >= 2 &&
+        expectedDerivedStartStep < expectedDerivedEndStep &&
+        expectedDerivedEndStep <= 18;
+      if (
+        Number.isFinite(expectedDerivedStartStep) &&
+        Number.isFinite(expectedDerivedEndStep) &&
+        !expectedWindowInBounds
+      ) {
+        reasons.push(
+          `${role} expected request resolved window [${expectedDerivedStartStep}, ${expectedDerivedEndStep}) must satisfy 2 <= start < end <= 18.`
+        );
+      }
+      if (
+        Number.isFinite(obsDerivedStartStep) &&
+        Number.isFinite(expectedDerivedStartStep) &&
+        obsDerivedStartStep !== expectedDerivedStartStep
+      ) {
+        reasons.push(
+          `${role} observed effectiveConfig startStep ${obs.effectiveConfig.startStep} (normalized ${obsDerivedStartStep}) !== expected ${expectedRequest.startStep} (normalized ${expectedDerivedStartStep}).`
+        );
+      }
+      if (
+        Number.isFinite(obsDerivedEndStep) &&
+        Number.isFinite(expectedDerivedEndStep) &&
+        obsDerivedEndStep !== expectedDerivedEndStep
+      ) {
+        reasons.push(
+          `${role} observed effectiveConfig endStep ${obs.effectiveConfig.endStep} (normalized ${obsDerivedEndStep}) !== expected ${expectedRequest.endStep} (normalized ${expectedDerivedEndStep}).`
+        );
+      }
+      if (obs.effectiveConfig.totalSteps !== expectedRequest.totalSteps) {
+        reasons.push(
+          `${role} observed effectiveConfig totalSteps ${obs.effectiveConfig.totalSteps} !== expected ${expectedRequest.totalSteps}.`
+        );
+      }
+    }
+  }
+
+  return {
+    valid: reasons.length === 0,
+    reasons
+  };
+}
+
 export function compareMinimaxH3Experiments(
   options: CompareMinimaxH3ExperimentsOptions
 ): MinimaxH3ComparisonReport {
@@ -423,6 +711,9 @@ export function compareMinimaxH3Experiments(
     ...(baselineAuxiliary ? { auxiliaryModels: baselineAuxiliary } : {}),
     ...(baselineSigmaShift ? { sigmaShift: baselineSigmaShift } : {}),
     ...(baselineAttentionDigest ? { attentionTopologyDigest: baselineAttentionDigest } : {}),
+    ...(baselineDescV2.teacacheRequest?.topologyDigest
+      ? { teacacheTopologyDigest: baselineDescV2.teacacheRequest.topologyDigest }
+      : {}),
     coreRevision:
       baselineDescV2.provenance?.comfyuiCoreRevision ??
       baselineDescV2.requiredRuntime?.coreRevision ??
@@ -470,6 +761,9 @@ export function compareMinimaxH3Experiments(
     ...(variantAuxiliary ? { auxiliaryModels: variantAuxiliary } : {}),
     ...(variantSigmaShift ? { sigmaShift: variantSigmaShift } : {}),
     ...(variantAttentionDigest ? { attentionTopologyDigest: variantAttentionDigest } : {}),
+    ...(variantDescV2.teacacheRequest?.topologyDigest
+      ? { teacacheTopologyDigest: variantDescV2.teacacheRequest.topologyDigest }
+      : {}),
     coreRevision:
       variantDescV2.provenance?.comfyuiCoreRevision ??
       variantDescV2.requiredRuntime?.coreRevision ??
@@ -482,6 +776,15 @@ export function compareMinimaxH3Experiments(
   if (baselineKey !== variantKey) {
     admissionReasons.push(
       "Invariant projection keys do not match across controlled baseline and variant."
+    );
+  }
+
+  if (
+    variantDescV2.teacacheRequest?.mode === "raw-l1-v1" &&
+    !declaredPaths.includes("caching.configuration")
+  ) {
+    admissionReasons.push(
+      'Candidate TeaCache variant must explicitly declare factor "caching.configuration" in changedFactors.'
     );
   }
 
@@ -726,6 +1029,156 @@ export function compareMinimaxH3Experiments(
         admissionReasons.push(
           `Declared factor "sampling.sigmaShift" after must not be enabled when variant has no sigmaShift.`
         );
+      }
+    } else if (factor.path === "caching.configuration") {
+      const baseReq = baselineDescV2.teacacheRequest;
+      const varReq = variantDescV2.teacacheRequest;
+      const baseMode = baseReq?.mode ?? "off";
+      const varMode = varReq?.mode ?? "off";
+      const beforeObj = factor.before as {
+        mode?: string;
+        threshold?: number | null;
+        relL1Thresh?: number | null;
+        startStep?: number | null;
+        endStep?: number | null;
+        totalSteps?: number | null;
+        window?: [number, number] | null;
+        topologyDigest?: string | null;
+        adapterVersion?: string | null;
+      } | null;
+      const afterObj = factor.after as {
+        mode?: string;
+        threshold?: number | null;
+        relL1Thresh?: number | null;
+        startStep?: number | null;
+        endStep?: number | null;
+        totalSteps?: number | null;
+        window?: [number, number] | null;
+        topologyDigest?: string | null;
+        adapterVersion?: string | null;
+      } | null;
+
+      if (!beforeObj || !afterObj) {
+        admissionReasons.push(
+          `Declared factor "caching.configuration" before and after summaries must be non-null objects.`
+        );
+      } else {
+        if (beforeObj.mode !== baseMode || afterObj.mode !== varMode) {
+          admissionReasons.push(
+            `Declared factor "caching.configuration" before/after mode does not match actual descriptor caching mode.`
+          );
+        }
+        if (varReq && varReq.mode === "raw-l1-v1") {
+          // These fields are required, not merely checked-if-present: a
+          // declarer that simply omits a field (undefined) must not be able
+          // to silently skip its validation, or an unchecked field could
+          // mismatch reality without ever being caught.
+          const afterThresh =
+            afterObj.relL1Thresh !== undefined ? afterObj.relL1Thresh : afterObj.threshold;
+          if (afterThresh === undefined) {
+            admissionReasons.push(
+              `Declared factor "caching.configuration" after threshold is missing for an active caching variant.`
+            );
+          } else if (afterThresh !== varReq.relL1Thresh) {
+            admissionReasons.push(
+              `Declared factor "caching.configuration" after threshold does not match actual variant threshold.`
+            );
+          }
+          if (afterObj.startStep === undefined) {
+            admissionReasons.push(
+              `Declared factor "caching.configuration" after startStep is missing.`
+            );
+          } else if (afterObj.startStep !== varReq.startStep) {
+            admissionReasons.push(
+              `Declared factor "caching.configuration" after startStep does not match actual variant startStep.`
+            );
+          }
+          if (afterObj.endStep === undefined) {
+            admissionReasons.push(
+              `Declared factor "caching.configuration" after endStep is missing.`
+            );
+          } else if (afterObj.endStep !== varReq.endStep) {
+            admissionReasons.push(
+              `Declared factor "caching.configuration" after endStep does not match actual variant endStep.`
+            );
+          }
+          if (afterObj.totalSteps === undefined) {
+            admissionReasons.push(
+              `Declared factor "caching.configuration" after totalSteps is missing.`
+            );
+          } else if (afterObj.totalSteps !== varReq.totalSteps) {
+            admissionReasons.push(
+              `Declared factor "caching.configuration" after totalSteps does not match actual variant totalSteps.`
+            );
+          }
+          if (afterObj.topologyDigest === undefined) {
+            admissionReasons.push(
+              `Declared factor "caching.configuration" after topologyDigest is missing.`
+            );
+          } else if (afterObj.topologyDigest !== varReq.topologyDigest) {
+            admissionReasons.push(
+              `Declared factor "caching.configuration" after topologyDigest does not match actual variant topologyDigest.`
+            );
+          }
+          if (afterObj.adapterVersion === undefined) {
+            admissionReasons.push(
+              `Declared factor "caching.configuration" after adapterVersion is missing.`
+            );
+          } else if (afterObj.adapterVersion !== varReq.adapterVersion) {
+            admissionReasons.push(
+              `Declared factor "caching.configuration" after adapterVersion does not match actual variant adapterVersion.`
+            );
+          }
+        }
+        if (baseMode === "off") {
+          // A cache-off baseline's "before" summary must affirmatively
+          // match the pinned disabled-caching constants -- not merely omit
+          // the topology/adapter fields that would otherwise catch a
+          // tampered declaration. (relL1Thresh/startStep/endStep still carry
+          // the schema's numeric defaults even when mode is "off" -- there
+          // is no "unset" representation for those -- so topologyDigest and
+          // adapterVersion are the two fields that actually distinguish a
+          // genuine disabled state from a fabricated one.)
+          if (beforeObj.topologyDigest === undefined) {
+            admissionReasons.push(
+              `Declared factor "caching.configuration" before topologyDigest is missing for a disabled-caching baseline.`
+            );
+          } else if (beforeObj.topologyDigest !== computeTeaCacheTopologyDigest(null)) {
+            admissionReasons.push(
+              `Declared factor "caching.configuration" before topologyDigest does not match the pinned no-topology digest for a disabled-caching ("off") baseline.`
+            );
+          }
+          if (beforeObj.adapterVersion === undefined) {
+            admissionReasons.push(
+              `Declared factor "caching.configuration" before adapterVersion is missing for a disabled-caching baseline.`
+            );
+          } else if (beforeObj.adapterVersion !== TEACACHE_ADAPTER_VERSION) {
+            admissionReasons.push(
+              `Declared factor "caching.configuration" before adapterVersion does not match the pinned adapter version for a disabled-caching ("off") baseline.`
+            );
+          }
+        } else if (baseReq && baseReq.mode === "raw-l1-v1") {
+          const beforeThresh =
+            beforeObj.relL1Thresh !== undefined ? beforeObj.relL1Thresh : beforeObj.threshold;
+          if (beforeThresh === undefined) {
+            admissionReasons.push(
+              `Declared factor "caching.configuration" before threshold is missing for an active caching baseline.`
+            );
+          } else if (beforeThresh !== baseReq.relL1Thresh) {
+            admissionReasons.push(
+              `Declared factor "caching.configuration" before threshold does not match actual baseline threshold.`
+            );
+          }
+          if (beforeObj.topologyDigest === undefined) {
+            admissionReasons.push(
+              `Declared factor "caching.configuration" before topologyDigest is missing for an active caching baseline.`
+            );
+          } else if (beforeObj.topologyDigest !== baseReq.topologyDigest) {
+            admissionReasons.push(
+              `Declared factor "caching.configuration" before topologyDigest does not match actual baseline topologyDigest.`
+            );
+          }
+        }
       }
     }
   }
@@ -1531,6 +1984,60 @@ export function compareMinimaxH3Experiments(
       }
 
       if (!attentionValid) {
+        wallTimeEligible = false;
+        samplingWallEligible = false;
+        kernelTimeEligible = false;
+      }
+    }
+
+    // TeaCache variant verification
+    const isTeaCacheComparison =
+      declaredPaths.includes("caching.configuration") ||
+      Boolean(variantDescV2.teacacheRequest) ||
+      Boolean(baselineDescV2.teacacheRequest);
+
+    if (isTeaCacheComparison) {
+      const varResV2 = variantResult as Partial<MinimaxH3ExperimentResultV2>;
+      const obs = varResV2.teacacheObservation;
+      const baseResV2 = baselineResult as Partial<MinimaxH3ExperimentResultV2>;
+      const baseObs = baseResV2.teacacheObservation;
+      let teacacheValid = true;
+
+      const baseMode = baselineDescV2.teacacheRequest?.mode ?? "off";
+      const baseEval = evaluateTeaCacheObservationEligibility({
+        role: "Baseline",
+        observation: baseObs,
+        mode: baseMode,
+        expectedRequest: baselineDescV2.teacacheRequest
+      });
+      if (!baseEval.valid) {
+        for (const r of baseEval.reasons) {
+          metricReasons.push(`${r} Speedup metrics disqualified.`);
+        }
+        teacacheValid = false;
+      }
+
+      if (variantDescV2.teacacheRequest) {
+        const varEval = evaluateTeaCacheObservationEligibility({
+          role: "Variant",
+          observation: obs,
+          mode: variantDescV2.teacacheRequest.mode,
+          expectedRequest: variantDescV2.teacacheRequest
+        });
+        if (!varEval.valid) {
+          for (const r of varEval.reasons) {
+            metricReasons.push(`${r} Speedup metrics disqualified.`);
+          }
+          teacacheValid = false;
+        }
+      } else {
+        metricReasons.push(
+          "Variant result lacks verified TeaCache observation evidence. Historical data or uninstrumented runs cannot support a speedup claim. Speedup metrics disqualified."
+        );
+        teacacheValid = false;
+      }
+
+      if (!teacacheValid) {
         wallTimeEligible = false;
         samplingWallEligible = false;
         kernelTimeEligible = false;

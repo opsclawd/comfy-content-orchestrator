@@ -339,6 +339,12 @@ export interface PrepareMinimaxH3ExperimentOptions {
   coreRevision?: string;
   matchedVariant?: MinimaxH3AttentionVariantName;
   samplingRecipe?: MinimaxH3SamplingRecipeName;
+  teacache?: "off" | "raw-l1-v1";
+  teacacheThreshold?: number;
+  teacacheStartStep?: number;
+  teacacheEndStep?: number;
+  teacacheTotalSteps?: number;
+  teacacheMatchedControl?: boolean;
   env?: Record<string, string>;
   fixturesDir?: string;
 }

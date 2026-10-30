@@ -1,0 +1,53 @@
+{
+  "upstream": {
+    "repository": "https://github.com/Icyoung/ComfyUI-MiniMaxH3-TeaCache",
+    "commit": "4cbb50d69c73a19a5d6ec42c5aec1989d5a04b6f",
+    "license": "MIT",
+    "licenseCopyright": "Copyright (c) 2026 Icyoung",
+    "pyprojectVersion": "0.1.0",
+    "pythonRequirement": ">=3.10",
+    "sourceFiles": {
+      "nodes.py": {
+        "sha256": "dc70a1e0b8c1a305ab70b47bada8f7600f35e0e4eb6282e1dd7369cf316f4287"
+      },
+      "teacache.py": {
+        "sha256": "97aa9dedcd360e7a861e4eb9e9a94c922b3ebee730dee4bd18799250a8bf217f"
+      },
+      "LICENSE": {
+        "sha256": "ae094efee2f41309823764a9d7d82871b4d1a271ae343f4e7cbdff61f2c5da67"
+      },
+      "pyproject.toml": {
+        "sha256": "e1c1e4f6737985fc5bba11c91934a072cf1b11b710346aa5e0620a26886289be"
+      },
+      "__init__.py": {
+        "sha256": "8a92598329096c262dd4ce55375e0b4908a4d6bf20f9f38a4988ab03e2d12416"
+      }
+    }
+  },
+  "adaptedNode": {
+    "nodeClass": "CCOMiniMaxH3TeaCacheNode",
+    "nodeKey": "CCOMiniMaxH3TeaCache",
+    "adapterVersion": "0.1.0-cco-experimental",
+    "algorithm": "raw-l1-v1",
+    "targetComfyUiCoreRevision": "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+    "localFiles": {
+      "__init__.py": {
+        "sha256": "3b14b0a4da6f0fa366d8da492ea85ce74f2a63f18336ac63970d9d2bfe128c94"
+      },
+      "nodes.py": {
+        "sha256": "ea16ae7ced6ab1ddfe7ba729a0a0c7047827f1e5601c6fd5c8363b837dd17d2c"
+      },
+      "teacache.py": {
+        "sha256": "d2aec13bfacdcbeae7bebca828f7721aad9370d90605aea66016df7b3ffea9bb"
+      }
+    },
+    "adaptationFindings": [
+      "F1: Upstream constructs state during node apply and closes over it; ComfyUI graph caching may reuse node output without re-executing apply. Adaptation uses execution-local session management scoped to each SamplerCustomAdvanced invocation.",
+      "F2: Upstream step counter advances on every wrapper call without checking sigmas, scheduler steps, or guider branching. Adaptation bounds step index strictly to the validated 20-interval sigma schedule.",
+      "F3: Upstream uses detach() without clone(), risking tensor aliasing if consumers mutate in place. Adaptation detaches and clones cached tensors.",
+      "F4: Upstream returns previous complete apply_model output (denoised prediction), which is an uncalibrated approximation on H3 packed AV streams. Adaptation preserves this explicit raw-L1 approximation with strict provenance tracking.",
+      "F5: Upstream uses raw relative-L1 on packed AV latents without polynomial rescale. Adaptation maintains the audited raw-L1 formula with finite value checks.",
+      "F6: Upstream counters are self-reported. Adaptation adds independent diffusion_model forward interception to prove skips."
+    ]
+  }
+}

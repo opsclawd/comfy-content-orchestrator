@@ -121,6 +121,32 @@ describe("MiniMax-H3 version and integrity validation", () => {
     }).toThrow(/nodes_minimax_h3\.py missing/);
   });
 
+  it("resolves the models directory from --comfy-dir alone, without a separate --models-dir (issue #467)", () => {
+    const mockComfy = setupMockComfyDir(tempDir);
+    fs.mkdirSync(path.join(mockComfy, "models"), { recursive: true });
+    // No --models-dir passed at all: the only hint is --comfy-dir. Before
+    // the fix, --comfy-dir was parsed but never consulted when resolving
+    // MODELS_DIR, so an existing-but-empty <mockComfy>/models fell through
+    // to the repo-relative defaults instead -- which, in this real
+    // checkout, resolves to a models directory that DOES exist and DOES
+    // have the real pinned files, so the bug would silently "pass" against
+    // the wrong directory. Asserting the error names <mockComfy>/models
+    // specifically (not the repo's own models/) proves the comfy-dir path
+    // was actually used.
+    let threw = false;
+    try {
+      execFileSync("bash", [CHECK_SCRIPT, "--comfy-dir", mockComfy], {
+        encoding: "utf-8",
+        stdio: "pipe"
+      });
+    } catch (err) {
+      threw = true;
+      const stderr = (err as { stderr?: Buffer | string }).stderr?.toString() ?? "";
+      expect(stderr).toContain(path.join(mockComfy, "models"));
+    }
+    expect(threw).toBe(true);
+  });
+
   it("check-minimax-h3-version.sh fails when models directory does not exist", () => {
     const mockComfy = setupMockComfyDir(tempDir);
     const nonExistentDir = path.join(tempDir, "does-not-exist");

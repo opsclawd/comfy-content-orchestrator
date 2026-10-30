@@ -6,6 +6,7 @@ import {
   MinimaxH3ExperimentService,
   compareMinimaxH3Experiments,
   listAttentionCatalogEntries,
+  listTeaCacheCatalogEntries,
   listSamplingRecipes,
   validateRecipeRouteCompatibility,
   expandContinuityStudyPlan,
@@ -47,6 +48,7 @@ import {
   type MinimaxH3ExperimentResultV2,
   type MinimaxH3ProcessRecord,
   type MinimaxH3AttentionVariantName,
+  type MinimaxH3TeaCacheVariantName,
   type MinimaxH3ContinuityStudySpec,
   type MinimaxH3ContinuityReviewSidecar
 } from "@cco/contracts";
@@ -160,6 +162,12 @@ Options for 'prepare':
   --attention-variant <variant>  Attention variant ('dense' | 'sage' | 'native-sol-attn' | 'veda')
   --matched-variant <variant>    Matched dense control target variant ('sage' | 'native-sol-attn' | 'veda')
   --comfyui-core-revision <rev>  Override ComfyUI core revision for catalog lookup (e.g. for upgraded dense control)
+  --teacache <off|raw-l1-v1>     TeaCache timestep caching mode (default: off)
+  --teacache-threshold <float>   TeaCache relative L1 threshold (e.g. 0.05, 0.1, 0.15)
+  --teacache-start-step <int>    TeaCache caching start step (e.g. 2)
+  --teacache-end-step <int>      TeaCache caching end step (e.g. -2 or 18)
+  --teacache-total-steps <int>   TeaCache total scheduler steps (must be 20)
+  --teacache-matched-control     Prepare matched unpatched control run for TeaCache comparison
 
 Options for 'validate':
   --run-dir <path>               Prepared run directory path (required)
@@ -194,8 +202,11 @@ Options for 'import-sidecar':
   --output-root <dir>            Experiment output root (default: ${DEFAULT_OUTPUT_ROOT})
 
 Options for 'catalog':
+  --type <attention|recipes|teacache> Catalog type to inspect (default: attention)
   --route <i2v|ref2v>            Filter catalog entries by route (optional)
   --attention-variant <variant>  Filter catalog entries by attention variant (optional)
+  --teacache                     List TeaCache catalog entries
+  --teacache-variant <name>      Filter TeaCache catalog entries by variant name ('teacache-raw-l1' | 'matched-control')
 `);
 }
 
@@ -204,6 +215,14 @@ function parseStrictInt(str?: string): number | null {
   if (!/^-?\d+$/.test(str.trim())) return null;
   const num = Number(str.trim());
   return Number.isSafeInteger(num) ? num : null;
+}
+
+function parseStrictFloat(str?: string): number | null {
+  if (!str) return null;
+  const trimmed = str.trim();
+  if (!/^-?\d+(\.\d+)?$/.test(trimmed)) return null;
+  const num = Number(trimmed);
+  return Number.isFinite(num) ? num : null;
 }
 
 export function parseArgs(rawArgs: readonly string[]): {
@@ -260,7 +279,7 @@ export function parseArgs(rawArgs: readonly string[]): {
         flags[k] = v;
       } else {
         const next = rawArgs[i + 1];
-        if (next && !next.startsWith("-")) {
+        if (next && (!next.startsWith("-") || /^-\d+(\.\d+)?$/.test(next))) {
           if (seenFlags.has(body)) {
             duplicateFlags.push(body);
           }
@@ -318,7 +337,13 @@ const ALLOWED_FLAGS_BY_SUBCOMMAND: Record<string, Set<string>> = {
     "attention-variant",
     "matched-variant",
     "comfyui-core-revision",
-    "core-revision"
+    "core-revision",
+    "teacache",
+    "teacache-threshold",
+    "teacache-start-step",
+    "teacache-end-step",
+    "teacache-total-steps",
+    "teacache-matched-control"
   ]),
   validate: new Set(["run-dir", "output-root", "templates-dir"]),
   run: new Set(["run-dir", "output-root", "stop-policy", "baseline-run-dir", "templates-dir"]),
@@ -343,7 +368,9 @@ const ALLOWED_FLAGS_BY_SUBCOMMAND: Record<string, Set<string>> = {
     "comfyui-core-revision",
     "core-revision",
     "recipes",
-    "type"
+    "type",
+    "teacache",
+    "teacache-variant"
   ]),
   "plan-study": new Set(["study", "file", "output", "output-root", "json"]),
   "prepare-study": new Set([
@@ -400,6 +427,12 @@ const VALUE_FLAGS = new Set([
   "matched-variant",
   "comfyui-core-revision",
   "core-revision",
+  "teacache",
+  "teacache-threshold",
+  "teacache-start-step",
+  "teacache-end-step",
+  "teacache-total-steps",
+  "teacache-variant",
   "run-dir",
   "stop-policy",
   "baseline-run-dir",
@@ -459,6 +492,9 @@ export async function runExperimentCli(
   }
 
   for (const key of booleanFlags) {
+    if (subcommand === "catalog" && (key === "teacache" || key === "recipes")) {
+      continue;
+    }
     if (VALUE_FLAGS.has(key)) {
       stderr(`Error: Flag "--${key}" requires a value.`);
       return 1;
@@ -691,6 +727,118 @@ export async function runExperimentCli(
           samplingRecipe = sr as MinimaxH3SamplingRecipeName;
         }
 
+        let teacache: "off" | "raw-l1-v1" | undefined;
+        if (flags["teacache"] !== undefined) {
+          const tc = flags["teacache"].toLowerCase();
+          if (tc !== "off" && tc !== "raw-l1-v1") {
+            stderr("Error: --teacache must be 'off' or 'raw-l1-v1'.");
+            return 1;
+          }
+          teacache = tc as "off" | "raw-l1-v1";
+        }
+
+        const teacacheMatchedControl = booleanFlags.has("teacache-matched-control");
+
+        if (teacache === "raw-l1-v1" && teacacheMatchedControl) {
+          stderr(
+            "Error: Cannot combine --teacache raw-l1-v1 with --teacache-matched-control; select either candidate or matched control."
+          );
+          return 1;
+        }
+
+        let teacacheThreshold: number | undefined;
+        if (flags["teacache-threshold"] !== undefined) {
+          const parsed = parseStrictFloat(flags["teacache-threshold"]);
+          if (parsed === null) {
+            stderr(
+              "Error: --teacache-threshold must be a valid finite number (e.g. 0.05, 0.1, 0.15)."
+            );
+            return 1;
+          }
+          teacacheThreshold = parsed;
+        }
+
+        let teacacheStartStep: number | undefined;
+        if (flags["teacache-start-step"] !== undefined) {
+          const parsed = parseStrictInt(flags["teacache-start-step"]);
+          if (parsed === null) {
+            stderr("Error: --teacache-start-step must be an integer.");
+            return 1;
+          }
+          teacacheStartStep = parsed;
+        }
+
+        let teacacheEndStep: number | undefined;
+        if (flags["teacache-end-step"] !== undefined) {
+          const parsed = parseStrictInt(flags["teacache-end-step"]);
+          if (parsed === null) {
+            stderr("Error: --teacache-end-step must be an integer.");
+            return 1;
+          }
+          teacacheEndStep = parsed;
+        }
+
+        let teacacheTotalSteps: number | undefined;
+        if (flags["teacache-total-steps"] !== undefined) {
+          const parsed = parseStrictInt(flags["teacache-total-steps"]);
+          if (parsed === null) {
+            stderr("Error: --teacache-total-steps must be an integer.");
+            return 1;
+          }
+          teacacheTotalSteps = parsed;
+        }
+
+        const isTeaCacheActive = teacache === "raw-l1-v1" || teacacheMatchedControl;
+        if (isTeaCacheActive) {
+          if (samplingRecipe !== undefined) {
+            stderr("Error: Cannot combine TeaCache with distillation --sampling-recipe.");
+            return 1;
+          }
+          if (checkpointOverride !== undefined) {
+            stderr("Error: Cannot combine TeaCache with --checkpoint-override.");
+            return 1;
+          }
+          if (attentionVariant !== undefined && attentionVariant !== "dense") {
+            stderr(
+              `Error: TeaCache currently requires dense attention, got --attention-variant "${attentionVariant}".`
+            );
+            return 1;
+          }
+          if (stepOverride !== undefined && stepOverride !== 20) {
+            stderr(
+              `Error: TeaCache currently requires 20 steps, got --step-override ${stepOverride}.`
+            );
+            return 1;
+          }
+        }
+
+        const hasKnobs =
+          teacacheThreshold !== undefined ||
+          teacacheStartStep !== undefined ||
+          teacacheEndStep !== undefined ||
+          teacacheTotalSteps !== undefined;
+
+        if (teacache !== "raw-l1-v1" && hasKnobs) {
+          stderr(
+            "Error: TeaCache parameter knobs (--teacache-threshold, --teacache-start-step, --teacache-end-step, --teacache-total-steps) can only be specified when --teacache is active (raw-l1-v1)."
+          );
+          return 1;
+        }
+
+        if (teacache === "raw-l1-v1") {
+          if (
+            teacacheThreshold === undefined ||
+            teacacheStartStep === undefined ||
+            teacacheEndStep === undefined ||
+            teacacheTotalSteps === undefined
+          ) {
+            stderr(
+              "Error: Active TeaCache candidate run requires explicit knobs: --teacache-threshold, --teacache-start-step, --teacache-end-step, and --teacache-total-steps must all be specified."
+            );
+            return 1;
+          }
+        }
+
         const coreRevision = flags["comfyui-core-revision"] ?? flags["core-revision"];
 
         const resolvedTemplatesDir = resolveCliPath(flags["templates-dir"]);
@@ -722,7 +870,13 @@ export async function runExperimentCli(
           ...(attentionVariant !== undefined ? { attentionVariant } : {}),
           ...(matchedVariant !== undefined ? { matchedVariant } : {}),
           ...(coreRevision !== undefined ? { coreRevision } : {}),
-          ...(samplingRecipe !== undefined ? { samplingRecipe } : {})
+          ...(samplingRecipe !== undefined ? { samplingRecipe } : {}),
+          ...(teacache !== undefined ? { teacache } : {}),
+          ...(teacacheThreshold !== undefined ? { teacacheThreshold } : {}),
+          ...(teacacheStartStep !== undefined ? { teacacheStartStep } : {}),
+          ...(teacacheEndStep !== undefined ? { teacacheEndStep } : {}),
+          ...(teacacheTotalSteps !== undefined ? { teacacheTotalSteps } : {}),
+          ...(teacacheMatchedControl ? { teacacheMatchedControl: true } : {})
         });
 
         stdout(
@@ -1572,6 +1726,28 @@ export async function runExperimentCli(
             recipes = recipes.filter((r) => r.compatibleRoute === routeFilter);
           }
           stdout(JSON.stringify(recipes, null, 2));
+          return 0;
+        }
+
+        if (
+          booleanFlags.has("teacache") ||
+          flags["type"] === "teacache" ||
+          flags["teacache"] !== undefined
+        ) {
+          const rawVariant = flags["teacache-variant"] ?? flags["teacache"] ?? flags["variant"];
+          const normalizedVariant: MinimaxH3TeaCacheVariantName | undefined =
+            rawVariant === "raw-l1-v1" || rawVariant === "teacache-raw-l1"
+              ? "teacache-raw-l1"
+              : rawVariant === "matched-control"
+                ? "matched-control"
+                : rawVariant === "off"
+                  ? "off"
+                  : undefined;
+          const entries = listTeaCacheCatalogEntries({
+            ...(routeFilter !== undefined ? { route: routeFilter } : {}),
+            ...(normalizedVariant !== undefined ? { variantName: normalizedVariant } : {})
+          });
+          stdout(JSON.stringify(entries, null, 2));
           return 0;
         }
 
