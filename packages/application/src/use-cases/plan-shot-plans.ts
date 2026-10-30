@@ -81,6 +81,27 @@ export function deriveStoryboardPrevisSeed(variantOrdinal: number, beatPosition:
   );
 }
 
+export const STORYBOARD_PREVIS_REROLL_SEED_STRIDE = 100_000;
+
+/**
+ * Derives the seed for an operator-requested per-beat previs re-roll. The original
+ * deterministic seed is offset by rerollOrdinal * STRIDE so a re-roll never reuses
+ * the seed that produced the flagged still. Does not alter deriveStoryboardPrevisSeed.
+ */
+export function deriveStoryboardPrevisRerollSeed(
+  variantOrdinal: number,
+  beatPosition: number,
+  rerollOrdinal: number
+): number {
+  if (!Number.isInteger(rerollOrdinal) || rerollOrdinal < 1) {
+    throw new RangeError(`rerollOrdinal must be an integer >= 1, received ${rerollOrdinal}.`);
+  }
+  return (
+    deriveStoryboardPrevisSeed(variantOrdinal, beatPosition) +
+    rerollOrdinal * STORYBOARD_PREVIS_REROLL_SEED_STRIDE
+  );
+}
+
 const SUPPORTED_PLANNER_IMAGE_MIMES = new Set(["image/png", "image/jpeg", "image/webp"]);
 
 export function resolveAndValidatePlannerImageMime(

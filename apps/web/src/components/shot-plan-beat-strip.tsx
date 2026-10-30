@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import type {
+  PrevisTextAdvisory,
   ShotPlanTemporalBeat,
   ShotPlanBeatFrameReviewItem,
   ShotPlanBeatFrameStatus
@@ -11,11 +12,21 @@ export interface ShotPlanBeatStripProps {
   readonly beats: readonly ShotPlanTemporalBeat[];
   readonly beatFrames?: readonly ShotPlanBeatFrameReviewItem[] | undefined;
   readonly planId?: string | undefined;
+  readonly sceneId?: string | undefined;
+}
+
+export interface PrevisRerollTarget {
+  readonly sceneId: string;
+  readonly shotPlanId: string;
+  readonly beatIndex: number;
+  readonly candidateId: string;
 }
 
 interface ShotPlanBeatSlotProps {
   readonly beat: ShotPlanTemporalBeat;
   readonly frame?: ShotPlanBeatFrameReviewItem | undefined;
+  readonly sceneId?: string | undefined;
+  readonly planId?: string | undefined;
 }
 
 function getPlaceholderText(status: ShotPlanBeatFrameStatus): string {
@@ -30,7 +41,94 @@ function getPlaceholderText(status: ShotPlanBeatFrameStatus): string {
   }
 }
 
-export function ShotPlanBeatSlot({ beat, frame }: ShotPlanBeatSlotProps) {
+/** Advisory-only OCR note; never disables review or approval controls. Text is rendered as plain text. */
+export function PrevisTextAdvisoryNote({
+  advisory,
+  reroll
+}: {
+  readonly advisory?: PrevisTextAdvisory | undefined;
+  readonly reroll?: PrevisRerollTarget | undefined;
+}) {
+  const [rerollState, setRerollState] = useState<"idle" | "pending" | "queued">("idle");
+  const [rerollError, setRerollError] = useState<string | undefined>(undefined);
+
+  if (!advisory || advisory.status === "clean") {
+    return null;
+  }
+  if (advisory.status === "unavailable") {
+    return (
+      <span
+        className="previs-text-advisory-unavailable"
+        data-testid="previs-text-advisory-unavailable"
+      >
+        Text check unavailable
+      </span>
+    );
+  }
+  return (
+    <div
+      className="storyboard-non-production-badge previs-text-advisory-badge"
+      data-testid="previs-text-advisory-badge"
+      role="note"
+    >
+      <span className="badge-text">Possible fabricated text</span>
+      <ul className="previs-text-advisory-detections">
+        {advisory.detections.map((d, i) => (
+          <li key={`${i}-${d.text}`}>
+            {d.text} ({Math.round(d.confidence * 100)}%)
+          </li>
+        ))}
+      </ul>
+      {reroll ? (
+        <>
+          <button
+            type="button"
+            className="previs-text-advisory-reroll"
+            data-testid="previs-reroll-button"
+            disabled={rerollState !== "idle"}
+            onClick={async () => {
+              setRerollState("pending");
+              setRerollError(undefined);
+              try {
+                const res = await fetch(
+                  `/api/scenes/${encodeURIComponent(reroll.sceneId)}/shot-plans/${encodeURIComponent(reroll.shotPlanId)}/beats/${reroll.beatIndex}/previs-reroll`,
+                  {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ expectedCandidateId: reroll.candidateId })
+                  }
+                );
+                if (!res.ok) {
+                  let message = `Re-roll failed (HTTP ${res.status})`;
+                  try {
+                    const data = (await res.json()) as { message?: unknown };
+                    if (typeof data.message === "string") message = data.message;
+                  } catch {
+                    // keep default message
+                  }
+                  throw new Error(message);
+                }
+                setRerollState("queued");
+              } catch (err) {
+                setRerollError(err instanceof Error ? err.message : "Re-roll failed");
+                setRerollState("idle");
+              }
+            }}
+          >
+            {rerollState === "queued" ? "Re-roll queued" : "Re-roll still"}
+          </button>
+          {rerollError ? (
+            <span className="previs-reroll-error" data-testid="previs-reroll-error" role="alert">
+              {rerollError}
+            </span>
+          ) : null}
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+export function ShotPlanBeatSlot({ beat, frame, sceneId, planId }: ShotPlanBeatSlotProps) {
   const [hasImageError, setHasImageError] = useState(false);
 
   // Reset local image load error whenever candidate or media URL changes
@@ -85,12 +183,25 @@ export function ShotPlanBeatSlot({ beat, frame }: ShotPlanBeatSlotProps) {
         <span className="shot-plan-beat-caption" data-testid="shot-plan-beat-caption">
           Beat {beat.beatIndex}
         </span>
+        <PrevisTextAdvisoryNote
+          advisory={frame?.textAdvisory}
+          reroll={
+            sceneId && planId && frame?.candidateId
+              ? {
+                  sceneId,
+                  shotPlanId: planId,
+                  beatIndex: beat.beatIndex,
+                  candidateId: frame.candidateId
+                }
+              : undefined
+          }
+        />
       </div>
     </li>
   );
 }
 
-export function ShotPlanBeatStrip({ beats, beatFrames, planId }: ShotPlanBeatStripProps) {
+export function ShotPlanBeatStrip({ beats, beatFrames, planId, sceneId }: ShotPlanBeatStripProps) {
   if (!beats || beats.length === 0) {
     return null;
   }
@@ -121,7 +232,13 @@ export function ShotPlanBeatStrip({ beats, beatFrames, planId }: ShotPlanBeatStr
       </div>
       <ol className="shot-plan-beat-slots" data-testid="shot-plan-beat-slots">
         {sortedBeats.map((beat) => (
-          <ShotPlanBeatSlot key={beat.beatIndex} beat={beat} frame={frameMap.get(beat.beatIndex)} />
+          <ShotPlanBeatSlot
+            key={beat.beatIndex}
+            beat={beat}
+            frame={frameMap.get(beat.beatIndex)}
+            sceneId={sceneId}
+            planId={planId}
+          />
         ))}
       </ol>
     </div>

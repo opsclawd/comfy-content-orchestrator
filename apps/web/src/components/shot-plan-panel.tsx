@@ -14,7 +14,7 @@ import type {
 } from "@cco/contracts";
 import { compileShotPlanAnimaticTimeline, resolveShotPlanDiffSource } from "@cco/contracts";
 import { ShotPlanAnimaticPlayer } from "./animatic/shot-plan-animatic-player";
-import { ShotPlanBeatStrip } from "./shot-plan-beat-strip";
+import { PrevisTextAdvisoryNote, ShotPlanBeatStrip } from "./shot-plan-beat-strip";
 import { ShotPlanVariationModal } from "./shot-plan-variation-modal";
 import { ShotPlanComparisonModal } from "./shot-plan-comparison-modal";
 import { ProductionInputInspector } from "./production-input-inspector";
@@ -865,6 +865,20 @@ export function ShotPlanPanel({
                       </span>
                     </div>
 
+                    <PrevisTextAdvisoryNote
+                      advisory={plan.previs?.textAdvisory}
+                      reroll={
+                        (plan.sceneId ?? sceneId) && plan.previs?.candidateId
+                          ? {
+                              sceneId: (plan.sceneId ?? sceneId) as string,
+                              shotPlanId: plan.shotPlanId,
+                              beatIndex: 1,
+                              candidateId: plan.previs.candidateId
+                            }
+                          : undefined
+                      }
+                    />
+
                     {plan.previs?.reviewNotes && (
                       <p className="previs-review-notes" data-testid="previs-review-notes">
                         <em>Previs notes:</em> {plan.previs.reviewNotes}
@@ -984,6 +998,7 @@ export function ShotPlanPanel({
                           beats={sortedBeats}
                           beatFrames={plan.beatFrames}
                           planId={plan.shotPlanId}
+                          sceneId={plan.sceneId ?? sceneId}
                         />
                       </div>
                     )}

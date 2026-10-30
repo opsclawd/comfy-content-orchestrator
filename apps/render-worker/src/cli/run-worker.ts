@@ -18,6 +18,11 @@ import {
   type GpuExecutionLeasePort,
   type GpuTelemetryPort,
   type HashBytesPort,
+  DEFAULT_PREVIS_TEXT_ADVISORY_TIMEOUT_MS,
+  parsePrevisTextAdvisoryPolicy,
+  PrevisTextAdvisoryConfigError,
+  type PrevisTextAdvisoryPolicy,
+  type PrevisTextDetectionPort,
   type ReferenceAssetRepository,
   type CampaignRepository,
   type ImageInspectionPort,
@@ -69,7 +74,8 @@ import {
   type ComfyUiOutputReader,
   type hashWorkflow,
   type loadCertificationProfile,
-  type S3ObjectStorageOptions
+  type S3ObjectStorageOptions,
+  TesseractPrevisTextDetector
 } from "@cco/infrastructure";
 import { BUCKETS } from "@cco/shared";
 import type { verifyGoldMasterProvenance } from "../certification/preflight.js";
@@ -148,6 +154,9 @@ export interface ProductionWorkerOverrides extends Partial<WorkerDependencies> {
   readonly campaignRepository?: CampaignRepository<CampaignRecord> | undefined;
   readonly shotPlanRepository?: ShotPlanRepository | undefined;
   readonly hashBytes?: HashBytesPort | undefined;
+  readonly previsTextDetector?: PrevisTextDetectionPort | undefined;
+  readonly previsTextAdvisoryPolicy?: PrevisTextAdvisoryPolicy | undefined;
+  readonly previsTextAdvisoryTimeoutMs?: number | undefined;
   readonly pool?: pg.Pool | undefined;
   readonly renderEngine?: RenderEnginePort | undefined;
   readonly gpuLease?: GpuExecutionLeasePort | undefined;
@@ -1016,6 +1025,17 @@ export function createProductionWorker(
           : effectiveConfig.h3TargetGpuUuid !== undefined
             ? { targetGpuUuid: effectiveConfig.h3TargetGpuUuid }
             : {}),
+        ...(overrides?.previsTextDetector !== undefined
+          ? {
+              previsTextDetector: overrides.previsTextDetector,
+              ...(overrides.previsTextAdvisoryPolicy !== undefined
+                ? { previsTextAdvisoryPolicy: overrides.previsTextAdvisoryPolicy }
+                : {}),
+              ...(overrides.previsTextAdvisoryTimeoutMs !== undefined
+                ? { previsTextAdvisoryTimeoutMs: overrides.previsTextAdvisoryTimeoutMs }
+                : {})
+            }
+          : {}),
         ...(overrides?.now !== undefined ? { now: overrides.now } : {})
       },
       {
@@ -1092,6 +1112,44 @@ export async function ensureStorageTelemetryDirectory(storagePath: string): Prom
   await mkdir(storagePath, { recursive: true });
 }
 
+/**
+ * Builds the advisory OCR detector from env (CCO_PREVIS_TEXT_ADVISORY_*). Enabled by default;
+ * an explicitly supplied detector override wins and is not owned (or terminated) here.
+ */
+export function resolvePrevisTextAdvisoryRuntime(
+  env: NodeJS.ProcessEnv,
+  overrides: ProductionWorkerOverrides | undefined
+): { overrides: ProductionWorkerOverrides | undefined; dispose: () => Promise<void> } {
+  const noop = async () => {};
+  if (overrides?.previsTextDetector !== undefined) {
+    return { overrides, dispose: noop };
+  }
+  if (env.CCO_PREVIS_TEXT_ADVISORY_ENABLED?.trim().toLowerCase() === "false") {
+    return { overrides, dispose: noop };
+  }
+  const policy = parsePrevisTextAdvisoryPolicy(env);
+  const rawTimeout = env.CCO_PREVIS_TEXT_ADVISORY_TIMEOUT_MS;
+  const timeoutMs =
+    rawTimeout === undefined || rawTimeout.trim() === ""
+      ? DEFAULT_PREVIS_TEXT_ADVISORY_TIMEOUT_MS
+      : Number(rawTimeout);
+  if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) {
+    throw new PrevisTextAdvisoryConfigError(
+      "CCO_PREVIS_TEXT_ADVISORY_TIMEOUT_MS must be a positive integer"
+    );
+  }
+  const detector = new TesseractPrevisTextDetector();
+  return {
+    overrides: {
+      ...overrides,
+      previsTextDetector: detector,
+      previsTextAdvisoryPolicy: policy,
+      previsTextAdvisoryTimeoutMs: timeoutMs
+    },
+    dispose: () => detector.terminate()
+  };
+}
+
 export async function runWorkerCli(
   argv: readonly string[] = process.argv.slice(2),
   env: NodeJS.ProcessEnv = process.env,
@@ -1102,7 +1160,8 @@ export async function runWorkerCli(
     const ensureDir =
       depsOverrides?.ensureStorageTelemetryDirectory ?? ensureStorageTelemetryDirectory;
     await ensureDir(config.storageTelemetryPath);
-    const worker = createProductionWorker(config, depsOverrides);
+    const previs = resolvePrevisTextAdvisoryRuntime(env, depsOverrides);
+    const worker = createProductionWorker(config, previs.overrides);
 
     const abortController = new AbortController();
     let shutdownRequested = false;
@@ -1124,6 +1183,7 @@ export async function runWorkerCli(
     } finally {
       process.removeListener("SIGINT", onSignal);
       process.removeListener("SIGTERM", onSignal);
+      await previs.dispose();
     }
   } catch (err) {
     console.error("Worker execution failed:", err instanceof Error ? err.message : String(err));

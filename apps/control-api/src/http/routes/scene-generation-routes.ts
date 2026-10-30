@@ -2,7 +2,9 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest 
 import {
   CreateShotPlanVariationRequestSchema,
   CreateShotPlanVariationResponseSchema,
-  GenerationAdmissionResponseSchema
+  GenerationAdmissionResponseSchema,
+  RerollPrevisBeatRequestSchema,
+  RerollPrevisBeatResponseSchema
 } from "@cco/contracts";
 import type { ControlApiContainer } from "../types.js";
 import { ShotPlanPlanningCoordinator } from "../../shot-plan-planning-coordinator.js";
@@ -72,6 +74,27 @@ export const createShotPlanVariationRouteSchema = {
       enqueuePrevisJobs: {
         type: "boolean"
       }
+    },
+    additionalProperties: false
+  }
+} as const;
+
+export const rerollPrevisBeatRouteSchema = {
+  params: {
+    type: "object",
+    required: ["sceneId", "shotPlanId", "beatIndex"],
+    properties: {
+      sceneId: { type: "string", format: "uuid" },
+      shotPlanId: { type: "string", format: "uuid" },
+      beatIndex: { type: "integer", minimum: 1 }
+    },
+    additionalProperties: false
+  },
+  body: {
+    type: "object",
+    required: ["expectedCandidateId"],
+    properties: {
+      expectedCandidateId: { type: "string", format: "uuid" }
     },
     additionalProperties: false
   }
@@ -276,6 +299,32 @@ export const sceneGenerationRoutes: FastifyPluginAsync<SceneGenerationRoutesOpti
       });
 
       return reply.status(200).send(response);
+    }
+  );
+
+  fastify.post<{
+    Params: { sceneId: string; shotPlanId: string; beatIndex: number };
+    Body: { expectedCandidateId: string };
+  }>(
+    "/api/scenes/:sceneId/shot-plans/:shotPlanId/beats/:beatIndex/previs-reroll",
+    { schema: rerollPrevisBeatRouteSchema },
+    async (request, reply) => {
+      if (!container.useCases.rerollPrevisBeat) {
+        return reply.status(503).send({
+          code: "CONFIGURATION_ERROR",
+          message: "Previs re-roll is not available."
+        });
+      }
+
+      const parsedBody = RerollPrevisBeatRequestSchema.parse(request.body);
+      const result = await container.useCases.rerollPrevisBeat.execute({
+        sceneId: request.params.sceneId,
+        shotPlanId: request.params.shotPlanId,
+        beatIndex: Number(request.params.beatIndex),
+        expectedCandidateId: parsedBody.expectedCandidateId
+      });
+
+      return reply.status(202).send(RerollPrevisBeatResponseSchema.parse(result));
     }
   );
 };

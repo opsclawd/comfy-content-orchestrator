@@ -9,10 +9,12 @@ import type {
   CampaignStatus,
   ReviewAction,
   SceneStatus,
+  PrevisTextAdvisory,
   ShotPlanBeatFrameReviewItem,
   ShotPlanReferenceBindingReviewItem,
   ShotPlanReviewItem
 } from "@cco/contracts";
+import { PrevisTextAdvisorySchema } from "@cco/contracts";
 import type {
   CampaignId,
   CandidateId,
@@ -90,6 +92,7 @@ interface ShotPlanJoinedRow {
   storage_object_key: string | null;
   content_hash_sha256: string | null;
   derived_from_shot_plan_id?: string | null;
+  generation_payload?: Record<string, unknown> | string | null;
 }
 
 interface StoryboardCandidateRow {
@@ -105,6 +108,25 @@ interface StoryboardCandidateRow {
   created_at: Date | string;
 }
 
+/** Malformed or missing advisories read as undefined; never throws. */
+export function readPrevisTextAdvisory(
+  generationPayload: Record<string, unknown> | string | null | undefined
+): PrevisTextAdvisory | undefined {
+  try {
+    const payload =
+      typeof generationPayload === "string"
+        ? (JSON.parse(generationPayload) as unknown)
+        : generationPayload;
+    if (!payload || typeof payload !== "object") return undefined;
+    const parsed = PrevisTextAdvisorySchema.safeParse(
+      (payload as Record<string, unknown>).textAdvisory
+    );
+    return parsed.success ? parsed.data : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 interface ShotPlanPrevisAssociationRow {
   shot_plan_id: string;
   beat_index: number | string;
@@ -116,6 +138,7 @@ interface ShotPlanPrevisAssociationRow {
   storage_bucket?: string | null;
   storage_object_key?: string | null;
   content_hash_sha256?: string | null;
+  generation_payload?: Record<string, unknown> | string | null;
 }
 
 interface CandidateJobRow {
@@ -165,7 +188,10 @@ function mapRowToShotPlanReviewItem(
   row: ShotPlanJoinedRow,
   currentRevision: number,
   currentBoundReferences: readonly ShotPlanReferenceBindingReviewItem[] = [],
-  associatedCandidateMap: ReadonlyMap<string, { candidateId: string }> = new Map(),
+  associatedCandidateMap: ReadonlyMap<
+    string,
+    { candidateId: string; textAdvisory?: PrevisTextAdvisory | undefined }
+  > = new Map(),
   latestCandidateJobMap: ReadonlyMap<string, { jobId: string; status: string }> = new Map()
 ): ShotPlanReviewItem {
   const structured =
@@ -177,6 +203,8 @@ function mapRowToShotPlanReviewItem(
     row.previs_candidate_id ??
     (structured.previs as Record<string, unknown> | undefined)?.candidateId;
 
+  const previsTextAdvisory = readPrevisTextAdvisory(row.generation_payload);
+
   const previs =
     previsCandidateId && row.storage_bucket && row.storage_object_key && row.content_hash_sha256
       ? {
@@ -185,7 +213,8 @@ function mapRowToShotPlanReviewItem(
             available: true
           },
           reviewNotes:
-            (structured.previs as { reviewNotes?: string | null } | undefined)?.reviewNotes ?? null
+            (structured.previs as { reviewNotes?: string | null } | undefined)?.reviewNotes ?? null,
+          ...(previsTextAdvisory ? { textAdvisory: previsTextAdvisory } : {})
         }
       : null;
 
@@ -220,7 +249,8 @@ function mapRowToShotPlanReviewItem(
         candidateId: assoc.candidateId,
         media: {
           available: true
-        }
+        },
+        ...(assoc.textAdvisory ? { textAdvisory: assoc.textAdvisory } : {})
       };
     }
 
@@ -505,7 +535,8 @@ export class PostgresSceneReviewQueries implements SceneReviewQueries {
         sp.derived_from_shot_plan_id,
         sc.storage_bucket,
         sc.storage_object_key,
-        sc.content_hash_sha256
+        sc.content_hash_sha256,
+        sc.generation_payload
       FROM shot_plans sp
       LEFT JOIN storyboard_candidates sc ON sc.candidate_id = sp.previs_candidate_id
       WHERE sp.scene_id = $1
@@ -526,7 +557,8 @@ export class PostgresSceneReviewQueries implements SceneReviewQueries {
         sc.beat_index AS candidate_beat_index,
         sc.storage_bucket,
         sc.storage_object_key,
-        sc.content_hash_sha256
+        sc.content_hash_sha256,
+        sc.generation_payload
       FROM shot_plan_previs_associations a
       JOIN storyboard_candidates sc
         ON sc.candidate_id = a.candidate_id
@@ -689,7 +721,10 @@ export class PostgresSceneReviewQueries implements SceneReviewQueries {
       candidates: Object.freeze(candidates)
     }));
 
-    const associatedCandidateMap = new Map<string, { candidateId: string }>();
+    const associatedCandidateMap = new Map<
+      string,
+      { candidateId: string; textAdvisory?: PrevisTextAdvisory | undefined }
+    >();
     for (const row of associationsResult.rows) {
       const beatIndex = parsePositiveInteger(row.beat_index);
       const candidateBeatIndex =
@@ -710,8 +745,10 @@ export class PostgresSceneReviewQueries implements SceneReviewQueries {
         candidateBeatIndex === beatIndex &&
         hasValidMedia
       ) {
+        const textAdvisory = readPrevisTextAdvisory(row.generation_payload);
         associatedCandidateMap.set(`${row.shot_plan_id}:${beatIndex}`, {
-          candidateId: row.candidate_id
+          candidateId: row.candidate_id,
+          ...(textAdvisory ? { textAdvisory } : {})
         });
       }
     }

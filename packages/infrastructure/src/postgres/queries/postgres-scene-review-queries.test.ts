@@ -4,7 +4,8 @@ import type { SceneId } from "@cco/domain";
 import {
   deriveAllowedActions,
   parsePositiveInteger,
-  PostgresSceneReviewQueries
+  PostgresSceneReviewQueries,
+  readPrevisTextAdvisory
 } from "./postgres-scene-review-queries.js";
 
 describe("parsePositiveInteger Unit Tests", () => {
@@ -1069,5 +1070,29 @@ describe("PostgresSceneReviewQueries Unit Tests", () => {
       const beat1 = detail?.shotPlans?.[0]?.beatFrames?.find((f) => f.beatIndex === 1);
       expect(beat1?.status).toBe("failed");
     });
+  });
+});
+
+describe("readPrevisTextAdvisory", () => {
+  const valid = {
+    status: "flagged",
+    policyVersion: "previs_text_advisory_v1",
+    thresholds: { minConfidence: 0.7, minAlnumChars: 3, minAlnumRatio: 0.6 },
+    maxConfidence: 0.9,
+    detections: [{ text: "LENTA", confidence: 0.9 }],
+    engine: { id: "tesseract.js", version: "7.0.0" },
+    checkedAt: "2026-10-30T00:00:00.000Z"
+  };
+
+  it("returns a valid advisory from object or JSON-string payloads", () => {
+    expect(readPrevisTextAdvisory({ textAdvisory: valid })?.status).toBe("flagged");
+    expect(readPrevisTextAdvisory(JSON.stringify({ textAdvisory: valid }))?.status).toBe("flagged");
+  });
+
+  it("returns undefined for missing or malformed values without throwing", () => {
+    expect(readPrevisTextAdvisory(null)).toBeUndefined();
+    expect(readPrevisTextAdvisory({})).toBeUndefined();
+    expect(readPrevisTextAdvisory({ textAdvisory: { status: "bogus" } })).toBeUndefined();
+    expect(readPrevisTextAdvisory("{not json")).toBeUndefined();
   });
 });

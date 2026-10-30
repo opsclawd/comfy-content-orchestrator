@@ -516,3 +516,4 @@ export {
 } from "./comfyui/provenance/json-file-staging-authorization-source.js";
 
 export * from "./experiments/index.js";
+export * from "./ocr/index.js";
