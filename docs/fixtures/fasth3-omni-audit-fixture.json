@@ -1,0 +1,122 @@
+{
+  "schemaVersion": 1,
+  "retrievedAt": "2026-10-29T10:00:00Z",
+  "upstreamReleaseStatus": "released",
+  "claims": [
+    {
+      "claimId": "omni-bf16-card-release",
+      "claimText": "Official FastH3-Omni 8-Step V1 BF16 weights card published on Hugging Face with reference conditioning and 8 transformer evaluation steps.",
+      "status": "unverified",
+      "basis": "Observed during planning at the immutable revision; a copy of the README was not captured, so no evidence digest exists yet.",
+      "sourceUrl": "https://huggingface.co/FastVideo/FastVideo-FastH3-Omni-8-Step-V1/blob/53e0d26a1691aa473b6262d8196a8feb2c297df0/README.md",
+      "retrievedAt": "2026-10-29T10:00:00Z",
+      "revision": "53e0d26a1691aa473b6262d8196a8feb2c297df0",
+      "evidenceDigest": null,
+      "verificationMethod": "unverified"
+    },
+    {
+      "claimId": "omni-comfy-int8-release",
+      "claimText": "Official FastH3-Omni Comfy pruned INT8 checkpoint published with published LFS SHA-256 and size ~22.2GB.",
+      "status": "verified",
+      "basis": "diffusion_models/fasth3_omniref_8step_pruned_int8_convrot.safetensors declared in FastH3-Omni-Comfy repository.",
+      "sourceUrl": "https://huggingface.co/FastVideo/FastH3-Omni-Comfy/blob/82eff2a6eee6c962846879f4bab52610a4df24d3/README.md",
+      "retrievedAt": "2026-10-29T10:00:00Z",
+      "revision": "82eff2a6eee6c962846879f4bab52610a4df24d3",
+      "evidenceDigest": null,
+      "upstreamLfsSha256": "851b2dc9670ed864b7f1e951ac9da047d83b1c04ded9bfcc1a9e5bba0ee33f80",
+      "verificationMethod": "remote_metadata_lfs"
+    },
+    {
+      "claimId": "fastvideo-sm89-rtx4090-recipe",
+      "claimText": "FastVideo source repository contains basic_fasth3_omniref_rtx4090.yaml recipe configured for 832x480 124 frames with layerwise FP8 streaming (16 blocks) and BF16 VSA emulator.",
+      "status": "unverified",
+      "basis": "Observed at commit 7203b4976eefcd70a52728ca1281797ce96734eb during planning; the recipe file was not captured or hashed, so it cannot yet be copied into a compiled specification.",
+      "sourceUrl": "https://github.com/hao-ai-lab/FastVideo/blob/7203b4976eefcd70a52728ca1281797ce96734eb/examples/inference/basic/basic_fasth3_omniref_rtx4090.yaml",
+      "retrievedAt": "2026-10-29T10:00:00Z",
+      "revision": "7203b4976eefcd70a52728ca1281797ce96734eb",
+      "evidenceDigest": null,
+      "verificationMethod": "unverified"
+    },
+    {
+      "claimId": "reactor-hosted-api-discrete-durations",
+      "claimText": "Reactor hosted API advertises discrete durations 5.875, 8, 10.125, 12.25, 14.375s and up to 3/9 reference images; hosted only, private assets prohibited from upload.",
+      "status": "unverified",
+      "basis": "Stated in the issue snapshot of 2026-10-19 and the design; mutable hosted documentation, not captured as a dated copy.",
+      "sourceUrl": "https://docs.reactor.inc/model-api-reference/fast-h3-omni/schema",
+      "retrievedAt": "2026-10-29T10:00:00Z",
+      "revision": null,
+      "evidenceDigest": null,
+      "verificationMethod": "unverified"
+    },
+    {
+      "claimId": "base-minimax-community-license",
+      "claimText": "Base MiniMax-H3 community license excludes EU/UK/KR/US territories, imposes $20M revenue conditions, and restricts output redistribution; commercial approval is review_required.",
+      "status": "review_required",
+      "basis": "MiniMaxAI/MiniMax-H3 LICENSE file inspected at commit 42ed227ee7df40d41602854ae760620d6eb651fe.",
+      "sourceUrl": "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/42ed227ee7df40d41602854ae760620d6eb651fe/LICENSE",
+      "retrievedAt": "2026-10-29T10:00:00Z",
+      "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+      "evidenceDigest": null,
+      "verificationMethod": "legal_audit"
+    },
+    {
+      "claimId": "nvfp4-blackwell-requirement",
+      "claimText": "Accelerated NVFP4 text encoding requires NVIDIA Blackwell hardware per the Comfy card and is not usable on RTX 4090 (SM89).",
+      "status": "unsupported",
+      "basis": "FastH3-Omni-Comfy README explicitly warns that NVFP4 text encoding requires Blackwell hardware.",
+      "sourceUrl": "https://huggingface.co/FastVideo/FastH3-Omni-Comfy/blob/82eff2a6eee6c962846879f4bab52610a4df24d3/README.md",
+      "retrievedAt": "2026-10-29T10:00:00Z",
+      "revision": "82eff2a6eee6c962846879f4bab52610a4df24d3",
+      "evidenceDigest": null,
+      "verificationMethod": "unverified"
+    },
+    {
+      "claimId": "fastvideo-export-artifacts",
+      "claimText": "FastVideo FP8/dense export shards, shard index, runtime config, tokenizer/processor, encoder, VAEs and AdaLN table (names, sizes, SHA-256) are not enumerated.",
+      "status": "unverified",
+      "basis": "Not audited. Recorded as unknown; unknown denies the corresponding operation.",
+      "sourceUrl": "https://github.com/hao-ai-lab/FastVideo/tree/7203b4976eefcd70a52728ca1281797ce96734eb",
+      "retrievedAt": "2026-10-29T10:00:00Z",
+      "revision": "7203b4976eefcd70a52728ca1281797ce96734eb",
+      "evidenceDigest": null,
+      "verificationMethod": "unverified"
+    },
+    {
+      "claimId": "runtime-dependency-closure",
+      "claimText": "Python, PyTorch/CUDA build, driver, kernel and dependency lock for the SM89 lane are not resolved; the pinned ComfyUI environment is not evidence for them.",
+      "status": "unverified",
+      "basis": "Not audited. Recorded as unknown; unknown denies the corresponding operation.",
+      "sourceUrl": "https://github.com/hao-ai-lab/FastVideo/tree/7203b4976eefcd70a52728ca1281797ce96734eb",
+      "retrievedAt": "2026-10-29T10:00:00Z",
+      "revision": "7203b4976eefcd70a52728ca1281797ce96734eb",
+      "evidenceDigest": null,
+      "verificationMethod": "unverified"
+    },
+    {
+      "claimId": "fastvideo-launch-command",
+      "claimText": "The upstream launch command and recipe schema for the Ref2VA lane are not captured, so no argv or config is compiled.",
+      "status": "unverified",
+      "basis": "Not audited. Recorded as unknown; unknown denies the corresponding operation.",
+      "sourceUrl": "https://github.com/hao-ai-lab/FastVideo/tree/7203b4976eefcd70a52728ca1281797ce96734eb",
+      "retrievedAt": "2026-10-29T10:00:00Z",
+      "revision": "7203b4976eefcd70a52728ca1281797ce96734eb",
+      "evidenceDigest": null,
+      "verificationMethod": "unverified"
+    }
+  ],
+  "rejectedCandidates": [
+    {
+      "name": "fastvideo_fasth3_8step_v2_pruned_int8_convrot.safetensors",
+      "reason": "FastH3 V2 checkpoint is strictly frame-anchored I2V only; lacks multi-reference conditioning architecture."
+    },
+    {
+      "name": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+      "reason": "FL2VA checkpoint is I2V first/last frame only; cannot accept general reference conditioning."
+    },
+    {
+      "name": "experimental_omniref_pdd",
+      "reason": "Pre-release experimental PDD checkpoints lack official release lineage and stability guarantees."
+    }
+  ],
+  "auditDigest": "f0eeeab5a9230580a0632ee0345a2e35f112711b8549bae54e3a0d4b2ba00bba"
+}

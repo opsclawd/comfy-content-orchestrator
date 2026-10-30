@@ -39,6 +39,7 @@ import {
   type MinimaxH3ExperimentResult,
   type MinimaxH3TelemetrySample,
   type MinimaxH3AnyExperimentDescriptor,
+  type MinimaxH3ExperimentDescriptorV2,
   type MinimaxH3AnyExperimentResult,
   type MinimaxH3ContinuityReviewSidecar,
   type ContinuityScenario
@@ -57,7 +58,7 @@ const mockI2vTemplate = {
   },
   "9": {
     class_type: "BasicScheduler",
-    inputs: { model: ["6", 0], scheduler: "simple", steps: 20 }
+    inputs: { model: ["6", 0], scheduler: "simple", steps: 20, denoise: 1 }
   },
   "14": {
     class_type: "SamplerCustomAdvanced",
@@ -2711,6 +2712,9 @@ describe("experiment:minimax-h3 CLI", () => {
       if (prepExit !== 0) {
         expect(stderr).toEqual([]);
       }
+      if (prepExit !== 0) {
+        console.error("DEBUG STDERR:", stderr);
+      }
       expect(prepExit).toBe(0);
       const parsed = JSON.parse(stdout[0]!);
       expect(parsed.status).toBe("prepared");
@@ -2729,6 +2733,562 @@ describe("experiment:minimax-h3 CLI", () => {
       const valOutput = JSON.parse(stdout[1]!);
       expect(valOutput.status).toBe("valid");
       expect(valOutput.graphValid).toBe(true);
+    });
+  });
+
+  describe("TeaCache CLI Flags", () => {
+    it("lists all TeaCache catalog entries with catalog --teacache", async () => {
+      const { deps, stdout } = createMockDeps();
+      const exitCode = await runExperimentCli(["catalog", "--teacache"], deps);
+      expect(exitCode).toBe(0);
+      const parsed = JSON.parse(stdout[0]!);
+      expect(Array.isArray(parsed)).toBe(true);
+      expect(parsed.length).toBeGreaterThanOrEqual(4);
+      const scopes = parsed.map((e: { scope: string }) => e.scope);
+      expect(scopes).toContain("teacache-raw-l1-i2v");
+      expect(scopes).toContain("teacache-raw-l1-ref2v");
+      expect(scopes).toContain("teacache-matched-control-i2v");
+      expect(scopes).toContain("teacache-matched-control-ref2v");
+    });
+
+    it("filters TeaCache entries with catalog --type teacache --route i2v", async () => {
+      const { deps, stdout } = createMockDeps();
+      const exitCode = await runExperimentCli(
+        ["catalog", "--type", "teacache", "--route", "i2v"],
+        deps
+      );
+      expect(exitCode).toBe(0);
+      const parsed = JSON.parse(stdout[0]!);
+      expect(Array.isArray(parsed)).toBe(true);
+      expect(parsed.length).toBe(2);
+      expect(parsed.every((e: { route: string }) => e.route === "i2v")).toBe(true);
+    });
+
+    it("filters TeaCache entries by variant with catalog --teacache --route ref2v --teacache-variant raw-l1-v1", async () => {
+      const { deps, stdout } = createMockDeps();
+      const exitCode = await runExperimentCli(
+        ["catalog", "--teacache", "--route", "ref2v", "--teacache-variant", "raw-l1-v1"],
+        deps
+      );
+      expect(exitCode).toBe(0);
+      const parsed = JSON.parse(stdout[0]!);
+      expect(Array.isArray(parsed)).toBe(true);
+      expect(parsed.length).toBe(1);
+      expect(parsed[0].scope).toBe("teacache-raw-l1-ref2v");
+      expect(parsed[0].variantName).toBe("teacache-raw-l1");
+    });
+
+    it("rejects invalid --teacache mode", async () => {
+      const { deps, stderr } = createMockDeps();
+      const exitCode = await runExperimentCli(
+        [
+          "prepare",
+          "--route",
+          "i2v",
+          "--frames",
+          "124",
+          "--seed",
+          "42",
+          "--inputs",
+          "inputs.json",
+          "--prompt",
+          "A test prompt",
+          "--target-host",
+          "render-worker-01",
+          "--gpu-uuid",
+          "GPU-12345678-1234-1234-1234-123456789abc",
+          "--comfyui-dir",
+          "/opt/comfyui",
+          "--python",
+          "/usr/bin/python3",
+          "--run-id",
+          "run-bad-teacache-mode",
+          "--output-root",
+          ".ai-runs/minimax-h3-experiments",
+          "--teacache",
+          "turbo"
+        ],
+        deps
+      );
+      expect(exitCode).toBe(1);
+      expect(stderr[0]).toContain("--teacache must be 'off' or 'raw-l1-v1'");
+    });
+
+    it("rejects combining --teacache with distillation --sampling-recipe", async () => {
+      const { deps, stderr } = createMockDeps();
+      const exitCode = await runExperimentCli(
+        [
+          "prepare",
+          "--route",
+          "i2v",
+          "--frames",
+          "124",
+          "--seed",
+          "42",
+          "--inputs",
+          "inputs.json",
+          "--prompt",
+          "A test prompt",
+          "--target-host",
+          "render-worker-01",
+          "--gpu-uuid",
+          "GPU-12345678-1234-1234-1234-123456789abc",
+          "--comfyui-dir",
+          "/opt/comfyui",
+          "--python",
+          "/usr/bin/python3",
+          "--run-id",
+          "run-incompat-tc-distill",
+          "--output-root",
+          ".ai-runs/minimax-h3-experiments",
+          "--teacache",
+          "raw-l1-v1",
+          "--sampling-recipe",
+          "fl2va-turbo-8"
+        ],
+        deps
+      );
+      expect(exitCode).toBe(1);
+      expect(stderr[0]).toContain("Cannot combine TeaCache with distillation --sampling-recipe");
+    });
+
+    it("rejects combining --teacache with --checkpoint-override", async () => {
+      const { deps, stderr } = createMockDeps();
+      const exitCode = await runExperimentCli(
+        [
+          "prepare",
+          "--route",
+          "i2v",
+          "--frames",
+          "124",
+          "--seed",
+          "42",
+          "--inputs",
+          "inputs.json",
+          "--prompt",
+          "A test prompt",
+          "--target-host",
+          "render-worker-01",
+          "--gpu-uuid",
+          "GPU-12345678-1234-1234-1234-123456789abc",
+          "--comfyui-dir",
+          "/opt/comfyui",
+          "--python",
+          "/usr/bin/python3",
+          "--run-id",
+          "run-incompat-tc-cp",
+          "--output-root",
+          ".ai-runs/minimax-h3-experiments",
+          "--teacache",
+          "raw-l1-v1",
+          "--checkpoint-override",
+          "fl2va"
+        ],
+        deps
+      );
+      expect(exitCode).toBe(1);
+      expect(stderr[0]).toContain("Cannot combine TeaCache with --checkpoint-override");
+    });
+
+    it("rejects combining --teacache with non-dense attention variant", async () => {
+      const { deps, stderr } = createMockDeps();
+      const exitCode = await runExperimentCli(
+        [
+          "prepare",
+          "--route",
+          "i2v",
+          "--frames",
+          "124",
+          "--seed",
+          "42",
+          "--inputs",
+          "inputs.json",
+          "--prompt",
+          "A test prompt",
+          "--target-host",
+          "render-worker-01",
+          "--gpu-uuid",
+          "GPU-12345678-1234-1234-1234-123456789abc",
+          "--comfyui-dir",
+          "/opt/comfyui",
+          "--python",
+          "/usr/bin/python3",
+          "--run-id",
+          "run-incompat-tc-attn",
+          "--output-root",
+          ".ai-runs/minimax-h3-experiments",
+          "--teacache",
+          "raw-l1-v1",
+          "--attention-variant",
+          "sage"
+        ],
+        deps
+      );
+      expect(exitCode).toBe(1);
+      expect(stderr[0]).toContain(
+        'TeaCache currently requires dense attention, got --attention-variant "sage"'
+      );
+    });
+
+    it("rejects combining --teacache with non-20 step override", async () => {
+      const { deps, stderr } = createMockDeps();
+      const exitCode = await runExperimentCli(
+        [
+          "prepare",
+          "--route",
+          "i2v",
+          "--frames",
+          "124",
+          "--seed",
+          "42",
+          "--inputs",
+          "inputs.json",
+          "--prompt",
+          "A test prompt",
+          "--target-host",
+          "render-worker-01",
+          "--gpu-uuid",
+          "GPU-12345678-1234-1234-1234-123456789abc",
+          "--comfyui-dir",
+          "/opt/comfyui",
+          "--python",
+          "/usr/bin/python3",
+          "--run-id",
+          "run-incompat-tc-steps",
+          "--output-root",
+          ".ai-runs/minimax-h3-experiments",
+          "--teacache",
+          "raw-l1-v1",
+          "--step-override",
+          "15"
+        ],
+        deps
+      );
+      expect(exitCode).toBe(1);
+      expect(stderr[0]).toContain("TeaCache currently requires 20 steps, got --step-override 15");
+    });
+
+    it("prepares and validates experiment with --teacache raw-l1-v1 and custom threshold", async () => {
+      const { deps, stdout, store } = createMockDeps();
+      const prepExit = await runExperimentCli(
+        [
+          "prepare",
+          "--route",
+          "i2v",
+          "--frames",
+          "124",
+          "--seed",
+          "42",
+          "--inputs",
+          "inputs.json",
+          "--prompt",
+          "A test prompt",
+          "--target-host",
+          "render-worker-01",
+          "--gpu-uuid",
+          "GPU-12345678-1234-1234-1234-123456789abc",
+          "--comfyui-dir",
+          "/opt/comfyui",
+          "--python",
+          "/usr/bin/python3",
+          "--run-id",
+          "run-teacache-010",
+          "--output-root",
+          ".ai-runs/minimax-h3-experiments",
+          "--teacache",
+          "raw-l1-v1",
+          "--teacache-threshold",
+          "0.10",
+          "--teacache-start-step",
+          "2",
+          "--teacache-end-step",
+          "-2",
+          "--teacache-total-steps",
+          "20"
+        ],
+        deps
+      );
+      expect(prepExit).toBe(0);
+      const parsed = JSON.parse(stdout[0]!);
+      expect(parsed.status).toBe("prepared");
+
+      const valExit = await runExperimentCli(
+        [
+          "validate",
+          "--run-dir",
+          parsed.runDir,
+          "--output-root",
+          ".ai-runs/minimax-h3-experiments"
+        ],
+        deps
+      );
+      expect(valExit).toBe(0);
+      const valOutput = JSON.parse(stdout[1]!);
+      expect(valOutput.status).toBe("valid");
+      expect(valOutput.graphValid).toBe(true);
+
+      // Verify the stored descriptor has teacacheRequest configured
+      const desc = store.descriptor as MinimaxH3ExperimentDescriptorV2;
+      expect(desc.teacacheRequest).toBeDefined();
+      expect(desc.teacacheRequest?.mode).toBe("raw-l1-v1");
+      expect(desc.teacacheRequest?.relL1Thresh).toBe(0.1);
+      expect(desc.experimentVariant.changedFactors).toContainEqual(
+        expect.objectContaining({
+          path: "caching.configuration"
+        })
+      );
+    });
+
+    it("prepares and validates matched control experiment with --teacache-matched-control", async () => {
+      const { deps, stdout, store } = createMockDeps();
+      const prepExit = await runExperimentCli(
+        [
+          "prepare",
+          "--route",
+          "i2v",
+          "--frames",
+          "124",
+          "--seed",
+          "42",
+          "--inputs",
+          "inputs.json",
+          "--prompt",
+          "A test prompt",
+          "--target-host",
+          "render-worker-01",
+          "--gpu-uuid",
+          "GPU-12345678-1234-1234-1234-123456789abc",
+          "--comfyui-dir",
+          "/opt/comfyui",
+          "--python",
+          "/usr/bin/python3",
+          "--run-id",
+          "run-teacache-matched-ctl",
+          "--output-root",
+          ".ai-runs/minimax-h3-experiments",
+          "--teacache-matched-control"
+        ],
+        deps
+      );
+      expect(prepExit).toBe(0);
+      const parsed = JSON.parse(stdout[0]!);
+      expect(parsed.status).toBe("prepared");
+
+      const valExit = await runExperimentCli(
+        [
+          "validate",
+          "--run-dir",
+          parsed.runDir,
+          "--output-root",
+          ".ai-runs/minimax-h3-experiments"
+        ],
+        deps
+      );
+      expect(valExit).toBe(0);
+      const valOutput = JSON.parse(stdout[1]!);
+      expect(valOutput.status).toBe("valid");
+      expect(valOutput.graphValid).toBe(true);
+
+      const desc = store.descriptor as MinimaxH3ExperimentDescriptorV2;
+      expect(desc.teacacheRequest).toBeDefined();
+      expect(desc.teacacheRequest?.mode).toBe("off");
+      expect(desc.teacacheRequest?.patchNode).toBeNull();
+      expect(desc.experimentVariant.changedFactors).toEqual([]);
+    });
+
+    it("rejects combining --teacache with --teacache-matched-control", async () => {
+      const { deps, stderr } = createMockDeps();
+      const exitCode = await runExperimentCli(
+        [
+          "prepare",
+          "--route",
+          "i2v",
+          "--frames",
+          "124",
+          "--seed",
+          "42",
+          "--inputs",
+          "inputs.json",
+          "--prompt",
+          "A test prompt",
+          "--target-host",
+          "render-worker-01",
+          "--gpu-uuid",
+          "GPU-12345678-1234-1234-1234-123456789abc",
+          "--comfyui-dir",
+          "/opt/comfyui",
+          "--python",
+          "/usr/bin/python3",
+          "--run-id",
+          "run-incompat-tc-both",
+          "--output-root",
+          ".ai-runs/minimax-h3-experiments",
+          "--teacache",
+          "raw-l1-v1",
+          "--teacache-matched-control"
+        ],
+        deps
+      );
+      expect(exitCode).toBe(1);
+      expect(stderr[0]).toContain(
+        "Cannot combine --teacache raw-l1-v1 with --teacache-matched-control"
+      );
+    });
+
+    it("rejects stray knobs when --teacache is not raw-l1-v1", async () => {
+      const { deps, stderr } = createMockDeps();
+      const exitCode = await runExperimentCli(
+        [
+          "prepare",
+          "--route",
+          "i2v",
+          "--frames",
+          "124",
+          "--seed",
+          "42",
+          "--inputs",
+          "inputs.json",
+          "--prompt",
+          "A test prompt",
+          "--target-host",
+          "render-worker-01",
+          "--gpu-uuid",
+          "GPU-12345678-1234-1234-1234-123456789abc",
+          "--comfyui-dir",
+          "/opt/comfyui",
+          "--python",
+          "/usr/bin/python3",
+          "--run-id",
+          "run-stray-knobs",
+          "--output-root",
+          ".ai-runs/minimax-h3-experiments",
+          "--teacache-threshold",
+          "0.10"
+        ],
+        deps
+      );
+      expect(exitCode).toBe(1);
+      expect(stderr[0]).toContain(
+        "TeaCache parameter knobs (--teacache-threshold, --teacache-start-step, --teacache-end-step, --teacache-total-steps) can only be specified when --teacache is active (raw-l1-v1)"
+      );
+    });
+
+    it("rejects active TeaCache candidate when missing required knobs", async () => {
+      const { deps, stderr } = createMockDeps();
+      const exitCode = await runExperimentCli(
+        [
+          "prepare",
+          "--route",
+          "i2v",
+          "--frames",
+          "124",
+          "--seed",
+          "42",
+          "--inputs",
+          "inputs.json",
+          "--prompt",
+          "A test prompt",
+          "--target-host",
+          "render-worker-01",
+          "--gpu-uuid",
+          "GPU-12345678-1234-1234-1234-123456789abc",
+          "--comfyui-dir",
+          "/opt/comfyui",
+          "--python",
+          "/usr/bin/python3",
+          "--run-id",
+          "run-missing-knobs",
+          "--output-root",
+          ".ai-runs/minimax-h3-experiments",
+          "--teacache",
+          "raw-l1-v1",
+          "--teacache-threshold",
+          "0.10"
+        ],
+        deps
+      );
+      expect(exitCode).toBe(1);
+      expect(stderr[0]).toContain(
+        "Active TeaCache candidate run requires explicit knobs: --teacache-threshold, --teacache-start-step, --teacache-end-step, and --teacache-total-steps must all be specified"
+      );
+    });
+
+    it("rejects invalid float for --teacache-threshold", async () => {
+      const { deps, stderr } = createMockDeps();
+      const exitCode = await runExperimentCli(
+        [
+          "prepare",
+          "--route",
+          "i2v",
+          "--frames",
+          "124",
+          "--seed",
+          "42",
+          "--inputs",
+          "inputs.json",
+          "--prompt",
+          "A test prompt",
+          "--target-host",
+          "render-worker-01",
+          "--gpu-uuid",
+          "GPU-12345678-1234-1234-1234-123456789abc",
+          "--comfyui-dir",
+          "/opt/comfyui",
+          "--python",
+          "/usr/bin/python3",
+          "--run-id",
+          "run-invalid-float",
+          "--output-root",
+          ".ai-runs/minimax-h3-experiments",
+          "--teacache",
+          "raw-l1-v1",
+          "--teacache-threshold",
+          "0.10abc"
+        ],
+        deps
+      );
+      expect(exitCode).toBe(1);
+      expect(stderr[0]).toContain("--teacache-threshold must be a valid finite number");
+    });
+
+    it("rejects invalid integer for --teacache-start-step", async () => {
+      const { deps, stderr } = createMockDeps();
+      const exitCode = await runExperimentCli(
+        [
+          "prepare",
+          "--route",
+          "i2v",
+          "--frames",
+          "124",
+          "--seed",
+          "42",
+          "--inputs",
+          "inputs.json",
+          "--prompt",
+          "A test prompt",
+          "--target-host",
+          "render-worker-01",
+          "--gpu-uuid",
+          "GPU-12345678-1234-1234-1234-123456789abc",
+          "--comfyui-dir",
+          "/opt/comfyui",
+          "--python",
+          "/usr/bin/python3",
+          "--run-id",
+          "run-invalid-int",
+          "--output-root",
+          ".ai-runs/minimax-h3-experiments",
+          "--teacache",
+          "raw-l1-v1",
+          "--teacache-threshold",
+          "0.10",
+          "--teacache-start-step",
+          "2.5"
+        ],
+        deps
+      );
+      expect(exitCode).toBe(1);
+      expect(stderr[0]).toContain("--teacache-start-step must be an integer");
     });
   });
 });

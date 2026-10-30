@@ -67,3 +67,4 @@ export * from "./staging-planning-authorization-ports.js";
 export * from "./campaign-duration-plan-repository.js";
 export * from "./operator-acceptance-ports.js";
 export * from "./previs-text-detection-port.js";
+export * from "./fasth3-omni-experiment-ports.js";
