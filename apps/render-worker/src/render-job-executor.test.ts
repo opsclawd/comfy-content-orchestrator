@@ -3727,6 +3727,351 @@ describe("Certified Render Job Executor", () => {
         storageBucket: "godzspeed-review",
         storageObjectKey: "previs/still.webp"
       });
+
+      // Verify workflow payload: Base-20 Ref2V has 20 steps and no LoRA node 301
+      expect(mockExecuteProfileRender).toHaveBeenCalledTimes(1);
+      const executedWorkflow = mockExecuteProfileRender.mock.calls[0]![0].workflow as Record<
+        string,
+        { class_type?: string; inputs: Record<string, unknown> }
+      >;
+      expect(executedWorkflow["301"]).toBeUndefined();
+      expect(executedWorkflow["9"]!.inputs.steps).toBe(20);
+      expect(executedWorkflow["9"]!.inputs.model).toEqual(["6", 0]);
+      expect(executedWorkflow["16"]!.inputs.model).toEqual(["6", 0]);
+    });
+
+    it("Ref2V turbo4: end-to-end workflow payload inspection verifies LoRA node 301, 4 steps, and guider wiring", async () => {
+      const realRef2vTurbo4Path = resolve(
+        DEFAULT_REPO_ROOT,
+        "templates/minimax_h3_720p_ref2v_turbo4_124f_api.json"
+      );
+      const realRef2vTurbo4Json = await readFile(realRef2vTurbo4Path, "utf8");
+      const shotPlanId = "shot-plan-turbo-001" as ShotPlanId;
+      const refAssetId = "asset-turbo-001" as ReferenceAssetId;
+
+      const fakeShotPlanDomain = ShotPlan.reconstitute({
+        id: shotPlanId,
+        sceneId: sampleSceneId,
+        specRevision: 1,
+        variantOrdinal: 1,
+        status: "approved",
+        routingMode: "reference_directed",
+        targetDurationMs: 5167,
+        targetFrameCount: 124,
+        durationToleranceMs: 355,
+        fps: 24,
+        framing: "medium",
+        angle: "eye_level",
+        lensIntent: "50mm prime",
+        cameraPosition: "standing height",
+        cameraMovement: "static",
+        movementSpeed: "slow",
+        cameraPromptDescription: "Turbo cinematic shot",
+        subjects: [],
+        actionSummary: "Hero stands in field",
+        beats: [
+          {
+            beatIndex: 1,
+            startMs: 0,
+            endMs: 5000,
+            description: "Hold",
+            cameraAction: "Static",
+            subjectAction: "Breathe"
+          }
+        ],
+        lightingStyle: "natural_golden_hour",
+        environmentDescription: "Field",
+        colorPalette: ["#FFD700"],
+        atmosphere: "Calm",
+        continuity: {
+          incomingContinuityFromSceneId: null,
+          persistentSubjectIds: [],
+          lightingContinuityNote: null,
+          frameAnchorTarget: "none",
+          anchorCandidateId: null,
+          anchorMediaHashSha256: null
+        },
+        createdAt: "2026-10-29T00:00:00Z",
+        updatedAt: "2026-10-29T00:00:00Z"
+      });
+
+      const fakeAsset: DomainReferenceAsset = {
+        id: refAssetId,
+        clientId: "client-001",
+        storageBucket: "cco-media",
+        storageObjectKey: "refs/hero.png",
+        contentHashSha256: "f5b76e9f55d5deff7787436acd8c16e1f2d196c00aa11288b9d6835b299c1a43",
+        mimeType: "image/png",
+        assetType: "image",
+        libraryRole: "subject_identity"
+      };
+
+      const mockShotPlanRepo: ShotPlanRepository = {
+        findById: vi.fn().mockResolvedValue(fakeShotPlanDomain),
+        save: vi.fn(),
+        saveMany: vi.fn(),
+        listBySceneAndRevision: vi.fn(),
+        listByScene: vi.fn(),
+        listByIdempotencyKey: vi.fn()
+      };
+
+      const mockRefAssetRepo: ReferenceAssetRepository = {
+        listBySceneId: vi.fn().mockResolvedValue([fakeAsset]),
+        findByIds: vi.fn().mockResolvedValue([fakeAsset]),
+        listBindingsBySceneId: vi.fn().mockResolvedValue([
+          {
+            sceneId: sampleSceneId,
+            specRevision: 1,
+            referenceAssetId: refAssetId,
+            role: "subject_identity",
+            weight: 1
+          }
+        ])
+      };
+
+      const mockExecuteProfileRender = vi.fn().mockResolvedValue({
+        status: "succeeded",
+        promptId: "prompt-turbo-1",
+        outputObjectKeys: ["renders/h3_ref2v_output.mp4"],
+        durationMs: 1500,
+        profile: {} as ProfileRenderIdentity,
+        preDispatchGpu: {
+          totalVramMb: 24576,
+          usedVramMb: 4096,
+          freeVramMb: 20480,
+          reservedVramMb: 4096,
+          measuredAt: new Date().toISOString()
+        }
+      });
+
+      const mockStage = vi.fn().mockResolvedValue({
+        name: "hero.png",
+        subfolder: "input"
+      });
+      const mockCleanup = vi.fn().mockResolvedValue(undefined);
+
+      const refBytes = new Uint8Array([
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0,
+        4, 0, 0, 0, 4, 0, 8, 2, 0, 0, 0
+      ]);
+
+      const mockStorage: ObjectStoragePort = {
+        getObject: vi.fn().mockResolvedValue({
+          body: refBytes,
+          contentLength: refBytes.byteLength,
+          contentType: "image/png"
+        }),
+        putObject: vi.fn().mockResolvedValue(undefined),
+        deleteObject: vi.fn().mockResolvedValue(undefined),
+        copyObject: vi.fn().mockResolvedValue({ bucket: "cco-media", key: "refs/hero.png" }),
+        headObject: vi
+          .fn()
+          .mockResolvedValue({ contentLength: refBytes.byteLength, contentType: "image/png" })
+      };
+
+      const mockManifestAssembler = vi.fn().mockReturnValue({
+        manifestId: "test-manifest-ref2v-turbo",
+        sceneId: sampleSceneId,
+        jobId: "job-ref2v-turbo-1"
+      });
+
+      const mockSceneDomain = Scene.reconstitute({
+        id: sampleSceneId,
+        campaignId: "campaign-1" as CampaignId,
+        status: "approved",
+        specRevision: 1,
+        approvedShotPlanId: shotPlanId,
+        approvedShotPlanRevision: 1,
+        configuration: {
+          prompt: "Scene prompt",
+          referenceIds: [],
+          engineProfileId: "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1",
+          durationMs: 5000
+        }
+      });
+      const mockSceneRepo: SceneRepository = {
+        findById: vi.fn().mockResolvedValue(mockSceneDomain),
+        save: vi.fn()
+      };
+      const mockCampaignRepo = {
+        findById: vi.fn().mockResolvedValue({ id: "campaign-1", clientId: "client-001" })
+      } as unknown as CampaignRepository<CampaignRecord>;
+
+      const mockImageValidator: ImageInspectionPort = {
+        inspectAndValidate: vi
+          .fn()
+          .mockImplementation(async (buf: Uint8Array, _declaredMime: string) => {
+            const header = parseImageByteHeader(buf);
+            return {
+              detectedMimeType: header!.mimeType,
+              width: header!.width,
+              height: header!.height,
+              byteLength: buf.byteLength
+            };
+          })
+      };
+
+      const fakeMinimaxRef2vTurbo4Profile: CertificationProfile = {
+        id: "minimax-h3-720p-124f-ref2v-turbo4",
+        engine: "minimax_h3_ref2v",
+        workflowPath: "/templates/minimax_h3_720p_ref2v_turbo4_124f_api.json",
+        workflowRelativePath: "minimax_h3_720p_ref2v_turbo4_124f_api.json",
+        expectedWorkflowHash: "82834f3253f10c87c4051e89341fcc547d391315b989765399642b483f7392b0",
+        source: {
+          kind: "authored_from_spec",
+          uri: "https://github.com/Comfy-Org/MiniMax-H3",
+          revision: "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1",
+          license: "MiniMax Community License"
+        },
+        assertions: [],
+        baseline: {
+          width: 1344,
+          height: 768,
+          frames: 124,
+          steps: 4,
+          approximateDurationSeconds: 1.5
+        },
+        minFreeDiskGb: 50,
+        runnerProfile: "dynamicvram-offload-v1",
+        models: [
+          {
+            category: "diffusion_models",
+            relativePath: "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
+          },
+          {
+            category: "loras",
+            relativePath: "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors"
+          }
+        ],
+        renderProfileIdentity: {
+          key: "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1",
+          version: 1
+        }
+      };
+
+      const executor = createCertifiedRenderJobExecutor({
+        loadCertificationProfile: async () => fakeMinimaxRef2vTurbo4Profile,
+        readApprovedProvenance: async () => ({
+          version: 1,
+          profileId: "minimax-h3-720p-124f-ref2v-turbo4",
+          generatedAt: "2026-10-29T00:00:00Z",
+          workflow: {
+            relativePath: "minimax_h3_720p_ref2v_turbo4_124f_api.json",
+            sha256: fakeMinimaxRef2vTurbo4Profile.expectedWorkflowHash,
+            source: fakeMinimaxRef2vTurbo4Profile.source
+          },
+          models: [],
+          git: { comfyUiCommit: "a".repeat(40), customNodes: [] },
+          disk: { passes: true },
+          renderProfileProvenance: {
+            key: "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1",
+            version: 1,
+            engine: "minimax_h3_ref2v",
+            frames: 124,
+            steps: 4,
+            workflowHash: fakeMinimaxRef2vTurbo4Profile.expectedWorkflowHash,
+            modelHashes: {}
+          }
+        }),
+        collectCertificationProvenance: async () => ({
+          version: 1,
+          profileId: "minimax-h3-720p-124f-ref2v-turbo4",
+          generatedAt: "2026-10-29T00:00:00Z",
+          workflow: {
+            relativePath: "minimax_h3_720p_ref2v_turbo4_124f_api.json",
+            sha256: fakeMinimaxRef2vTurbo4Profile.expectedWorkflowHash,
+            source: fakeMinimaxRef2vTurbo4Profile.source
+          },
+          models: [],
+          git: { comfyUiCommit: "a".repeat(40), customNodes: [] },
+          disk: {
+            passes: true,
+            modelFootprintBytes: 0,
+            availableBytes: 100_000_000_000,
+            requiredFreeBytes: 50_000_000_000,
+            modelFootprintGb: 0,
+            availableGb: 100,
+            minFreeDiskGb: 50
+          },
+          renderProfileProvenance: {
+            key: "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1",
+            version: 1,
+            engine: "minimax_h3_ref2v",
+            frames: 124,
+            steps: 4,
+            workflowHash: fakeMinimaxRef2vTurbo4Profile.expectedWorkflowHash,
+            runnerProfile: "dynamicvram-offload-v1",
+            measuredDiskFootprintGb: 10,
+            minFreeDiskGb: 50,
+            modelHashes: {}
+          }
+        }),
+        verifyGoldMasterProvenance: () => {},
+        readWorkflowFile: async () => realRef2vTurbo4Json,
+        hashWorkflow: () => fakeMinimaxRef2vTurbo4Profile.expectedWorkflowHash,
+        executeProfileRender: mockExecuteProfileRender,
+        outputReader: new FakeOutputReader(
+          new Map([
+            [
+              "renders/h3_ref2v_output.mp4",
+              { bytes: new Uint8Array([1, 2, 3]), contentType: "video/mp4" }
+            ]
+          ])
+        ),
+        sceneRepository: mockSceneRepo,
+        campaignRepository: mockCampaignRepo,
+        shotPlanRepository: mockShotPlanRepo,
+        referenceAssetRepository: mockRefAssetRepo,
+        objectStorage: mockStorage,
+        stageReferenceImage: { stage: mockStage, cleanup: mockCleanup },
+        imageValidator: mockImageValidator,
+        productionManifestAssembler: { assemble: mockManifestAssembler },
+        formatAwareProber: defaultTestFormatAwareProber
+      });
+
+      const turboJob = createSampleProductionJob({
+        workflowTemplate: "minimax-h3-720p-124f-ref2v-turbo4",
+        injectedPayload: {
+          prompt: "Turbo prompt",
+          seed: 42,
+          shotPlanId,
+          specRevision: 1
+        }
+      });
+
+      const result = await executor(turboJob);
+      expect(result.manifestPayload).toBeDefined();
+
+      expect(mockStage).toHaveBeenCalledTimes(1);
+      expect(mockCleanup).toHaveBeenCalledTimes(1);
+
+      // Verify workflow payload has been modified with turbo LoRA and 4 steps
+      expect(mockExecuteProfileRender).toHaveBeenCalledTimes(1);
+      const executedWorkflow = mockExecuteProfileRender.mock.calls[0]![0].workflow as Record<
+        string,
+        { class_type?: string; inputs: Record<string, unknown> }
+      >;
+
+      // 1. LoRA node 301 is present with correct model and strength
+      expect(executedWorkflow["301"]).toBeDefined();
+      expect(executedWorkflow["301"]!.class_type).toBe("LoraLoaderModelOnly");
+      expect(executedWorkflow["301"]!.inputs.lora_name).toBe(
+        "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors"
+      );
+      expect(executedWorkflow["301"]!.inputs.strength_model).toBe(1);
+
+      // 2. Scheduler node 9 has steps: 4 and model wired to node 301
+      expect(executedWorkflow["9"]!.inputs.steps).toBe(4);
+      expect(executedWorkflow["9"]!.inputs.model).toEqual(["301", 0]);
+
+      // 3. Guider node 16 has model wired to node 301
+      expect(executedWorkflow["16"]!.inputs.model).toEqual(["301", 0]);
+
+      // 4. Manifest assembler routing mode
+      expect(mockManifestAssembler).toHaveBeenCalledTimes(1);
+      const assemblerCallArgs = mockManifestAssembler.mock.calls[0]![0];
+      expect(assemblerCallArgs.conditioningImage).toBeUndefined();
+      expect(assemblerCallArgs.routingMode).toBe("reference_directed");
     });
 
     describe("Ref2V adversarial integrity and governance gates", () => {

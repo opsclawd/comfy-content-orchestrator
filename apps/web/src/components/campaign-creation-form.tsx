@@ -34,6 +34,8 @@ import { generateUuidV4 } from "../lib/generate-uuid";
 import {
   createInitialState,
   transitionCampaignCreationState,
+  isMinimaxH3EngineProfileId,
+  isMinimaxH3TurboEngineProfileId,
   type CampaignCreationEvent,
   type CampaignCreationFormValues,
   type CampaignCreationState
@@ -1041,75 +1043,125 @@ export function CampaignCreationForm({
               marginTop: "0.5rem"
             }}
           >
-            {/* MiniMax-H3 Card */}
-            <label
-              data-testid="engine-card-minimax-h3"
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: "0.5rem",
-                padding: "1rem",
-                borderRadius: "var(--radius-md)",
-                border:
-                  values.targetEngineProfileId === "MINIMAX_H3_720P_5S_I2V_V1"
+            {/* MiniMax-H3 Column */}
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+              <label
+                data-testid="engine-card-minimax-h3"
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "0.5rem",
+                  padding: "1rem",
+                  borderRadius: "var(--radius-md)",
+                  border: isMinimaxH3EngineProfileId(values.targetEngineProfileId)
                     ? "2px solid var(--color-primary)"
                     : "1px solid var(--border-subtle)",
-                backgroundColor:
-                  values.targetEngineProfileId === "MINIMAX_H3_720P_5S_I2V_V1"
+                  backgroundColor: isMinimaxH3EngineProfileId(values.targetEngineProfileId)
                     ? "var(--bg-surface-elevated)"
                     : "var(--bg-surface)",
-                cursor: isSubmitting ? "not-allowed" : "pointer",
-                transition: "all 0.15s ease",
-                textTransform: "none"
-              }}
-            >
-              <div
-                style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}
-              >
-                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                  <input
-                    type="radio"
-                    name="targetEngineProfileId"
-                    value="MINIMAX_H3_720P_5S_I2V_V1"
-                    checked={values.targetEngineProfileId === "MINIMAX_H3_720P_5S_I2V_V1"}
-                    onChange={() =>
-                      handleFieldChange("targetEngineProfileId", "MINIMAX_H3_720P_5S_I2V_V1")
-                    }
-                    disabled={isSubmitting}
-                    data-testid="engine-radio-minimax-h3"
-                  />
-                  <strong style={{ color: "var(--text-primary)", fontSize: "0.95rem" }}>
-                    MiniMax-H3
-                  </strong>
-                </div>
-                <span
-                  style={{
-                    fontSize: "0.7rem",
-                    fontWeight: 600,
-                    padding: "0.15rem 0.5rem",
-                    borderRadius: "999px",
-                    backgroundColor: "rgba(56, 189, 248, 0.15)",
-                    color: "var(--color-primary)"
-                  }}
-                >
-                  Photorealistic Hero
-                </span>
-              </div>
-              <p
-                style={{
-                  fontSize: "0.8125rem",
-                  color: "var(--text-secondary)",
-                  margin: 0,
-                  lineHeight: 1.4
+                  cursor: isSubmitting ? "not-allowed" : "pointer",
+                  transition: "all 0.15s ease",
+                  textTransform: "none",
+                  height: "100%"
                 }}
               >
-                High-capacity multimodal video model. Realistic skin texture, facial wrinkles,
-                natural lighting, and synchronized AAC audio.
-              </p>
-              <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "auto" }}>
-                1344×768 (720p) · 124 frames (5.0s) · ~6.5m on RTX 4090
-              </div>
-            </label>
+                <div
+                  style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <input
+                      type="radio"
+                      name="targetEngineProfileId"
+                      value="MINIMAX_H3_720P_5S_I2V_V1"
+                      checked={isMinimaxH3EngineProfileId(values.targetEngineProfileId)}
+                      onChange={() =>
+                        handleFieldChange("targetEngineProfileId", "MINIMAX_H3_720P_5S_I2V_V1")
+                      }
+                      disabled={isSubmitting}
+                      data-testid="engine-radio-minimax-h3"
+                    />
+                    <strong style={{ color: "var(--text-primary)", fontSize: "0.95rem" }}>
+                      MiniMax-H3
+                    </strong>
+                  </div>
+                  <span
+                    style={{
+                      fontSize: "0.7rem",
+                      fontWeight: 600,
+                      padding: "0.15rem 0.5rem",
+                      borderRadius: "999px",
+                      backgroundColor: "rgba(56, 189, 248, 0.15)",
+                      color: "var(--color-primary)"
+                    }}
+                  >
+                    Photorealistic Hero
+                  </span>
+                </div>
+                <p
+                  style={{
+                    fontSize: "0.8125rem",
+                    color: "var(--text-secondary)",
+                    margin: 0,
+                    lineHeight: 1.4
+                  }}
+                >
+                  High-capacity multimodal video model. Realistic skin texture, facial wrinkles,
+                  natural lighting, and synchronized AAC audio.
+                </p>
+                <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "auto" }}>
+                  {isMinimaxH3TurboEngineProfileId(values.targetEngineProfileId)
+                    ? "1344×768 (720p) · 124 frames (5.0s) · ~4x faster than standard"
+                    : "1344×768 (720p) · 124 frames (5.0s) · ~6.5m on RTX 4090"}
+                </div>
+              </label>
+
+              {/* MiniMax-H3 Turbo Toggle (Ref2V only, opt-in) */}
+              {isMinimaxH3EngineProfileId(values.targetEngineProfileId) && (
+                <label
+                  data-testid="minimax-h3-turbo-toggle-label"
+                  style={{
+                    display: "flex",
+                    alignItems: "flex-start",
+                    gap: "0.5rem",
+                    padding: "0.625rem 0.75rem",
+                    borderRadius: "var(--radius-sm)",
+                    backgroundColor: "var(--bg-surface)",
+                    border: "1px solid var(--border-subtle)",
+                    cursor: isSubmitting ? "not-allowed" : "pointer",
+                    fontSize: "0.8125rem",
+                    textTransform: "none"
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    data-testid="minimax-h3-turbo-toggle"
+                    checked={isMinimaxH3TurboEngineProfileId(values.targetEngineProfileId)}
+                    disabled={isSubmitting}
+                    onChange={(e) =>
+                      handleFieldChange(
+                        "targetEngineProfileId",
+                        e.target.checked
+                          ? "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1"
+                          : "MINIMAX_H3_720P_5S_I2V_V1"
+                      )
+                    }
+                    style={{
+                      marginTop: "0.125rem",
+                      cursor: isSubmitting ? "not-allowed" : "pointer"
+                    }}
+                  />
+                  <div style={{ display: "flex", flexDirection: "column", gap: "0.125rem" }}>
+                    <span style={{ fontWeight: 500, color: "var(--text-primary)" }}>
+                      ⚡ Use Turbo rendering (4-step, ~4x faster, validated — see #445)
+                    </span>
+                    <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                      Opt-in 4-step Ref2V recipe for rapid reference-directed rendering. Standard
+                      20-step remains default.
+                    </span>
+                  </div>
+                </label>
+              )}
+            </div>
 
             {/* LTX-Video 2.5 Card */}
             <label

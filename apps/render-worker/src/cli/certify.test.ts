@@ -261,6 +261,68 @@ describe("certify CLI", () => {
     })
   });
 
+  const mockMinimaxRef2vTurbo4Profile: CertificationProfile = Object.freeze({
+    id: "minimax-h3-720p-124f-ref2v-turbo4",
+    engine: "minimax_h3_ref2v",
+    workflowPath: "/test/manifests/minimax_h3_720p_ref2v_turbo4_124f_api.json",
+    workflowRelativePath: "minimax_h3_720p_ref2v_turbo4_124f_api.json",
+    expectedWorkflowHash: "d".repeat(64),
+    source: Object.freeze({
+      kind: "authored_from_spec" as const,
+      uri: "https://github.com/comfyanonymous/ComfyUI",
+      revision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+      license: "GPL-3.0"
+    }),
+    baseline: Object.freeze({
+      width: 1344,
+      height: 768,
+      frames: 124,
+      steps: 4,
+      approximateDurationSeconds: 5
+    }),
+    minFreeDiskGb: 50,
+    runnerProfile: "dynamicvram-offload-v1",
+    models: Object.freeze([
+      {
+        category: "clip" as const,
+        relativePath: "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
+      },
+      {
+        category: "diffusion_models" as const,
+        relativePath: "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
+      },
+      {
+        category: "vae" as const,
+        relativePath: "minimax_h3_audio_vae_fp32.safetensors"
+      },
+      {
+        category: "vae" as const,
+        relativePath: "minimax_h3_video_vae_int8_convrot.safetensors"
+      },
+      {
+        category: "loras" as const,
+        relativePath: "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors"
+      }
+    ]),
+    assertions: Object.freeze([
+      { nodeId: "9", classType: "BasicScheduler", input: "steps", equals: 4 },
+      {
+        nodeId: "301",
+        classType: "LoraLoaderModelOnly",
+        input: "lora_name",
+        equals: "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors"
+      },
+      { nodeId: "301", classType: "LoraLoaderModelOnly", input: "strength_model", equals: 1 },
+      { nodeId: "105", classType: "MiniMaxH3ReferenceToVideo", input: "width", equals: 1344 },
+      { nodeId: "105", classType: "MiniMaxH3ReferenceToVideo", input: "height", equals: 768 },
+      { nodeId: "105", classType: "MiniMaxH3ReferenceToVideo", input: "length", equals: 124 }
+    ]),
+    renderProfileIdentity: Object.freeze({
+      key: "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1" as const,
+      version: 1 as const
+    })
+  });
+
   const mockApprovedProvenance: CertificationProvenanceReport = Object.freeze({
     version: 1,
     profileId: "ltx-25-720p-97f",
@@ -481,6 +543,90 @@ describe("certify CLI", () => {
       steps: 20,
       runnerProfile: "dynamicvram-offload-v1",
       measuredDiskFootprintGb: 0.000004,
+      minFreeDiskGb: 50
+    })
+  });
+
+  const mockApprovedRef2vTurbo4Provenance: CertificationProvenanceReport = Object.freeze({
+    version: 1,
+    profileId: "minimax-h3-720p-124f-ref2v-turbo4",
+    generatedAt: "2026-10-29T12:00:00.000Z",
+    workflow: Object.freeze({
+      relativePath: "minimax_h3_720p_ref2v_turbo4_124f_api.json",
+      sha256: "d".repeat(64),
+      source: Object.freeze({
+        kind: "validated_host_export" as const,
+        uri: "https://github.com/comfyanonymous/ComfyUI",
+        revision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+        license: "GPL-3.0"
+      })
+    }),
+    models: Object.freeze([
+      {
+        category: "clip" as const,
+        relativePath: "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+        key: "clip/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+        sha256: "4".repeat(64),
+        bytes: 1000
+      },
+      {
+        category: "diffusion_models" as const,
+        relativePath: "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+        key: "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+        sha256: "5".repeat(64),
+        bytes: 1000
+      },
+      {
+        category: "vae" as const,
+        relativePath: "minimax_h3_audio_vae_fp32.safetensors",
+        key: "vae/minimax_h3_audio_vae_fp32.safetensors",
+        sha256: "6".repeat(64),
+        bytes: 1000
+      },
+      {
+        category: "vae" as const,
+        relativePath: "minimax_h3_video_vae_int8_convrot.safetensors",
+        key: "vae/minimax_h3_video_vae_int8_convrot.safetensors",
+        sha256: "7".repeat(64),
+        bytes: 1000
+      },
+      {
+        category: "loras" as const,
+        relativePath: "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+        key: "loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+        sha256: "8".repeat(64),
+        bytes: 500
+      }
+    ]),
+    git: Object.freeze({
+      comfyUiCommit: "d".repeat(40),
+      customNodes: Object.freeze([])
+    }),
+    disk: Object.freeze({
+      modelFootprintBytes: 4500,
+      availableBytes: 200_000_000_000,
+      requiredFreeBytes: 50_000_000_000,
+      modelFootprintGb: 0.0000045,
+      availableGb: 200,
+      minFreeDiskGb: 50,
+      passes: true
+    }),
+    renderProfileProvenance: Object.freeze({
+      key: "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1",
+      version: 1,
+      engine: "minimax_h3_ref2v",
+      workflowHash: "d".repeat(64),
+      modelHashes: Object.freeze({
+        "clip/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors": "4".repeat(64),
+        "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors": "5".repeat(64),
+        "vae/minimax_h3_audio_vae_fp32.safetensors": "6".repeat(64),
+        "vae/minimax_h3_video_vae_int8_convrot.safetensors": "7".repeat(64),
+        "loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors": "8".repeat(64)
+      }),
+      frames: 124,
+      steps: 4,
+      runnerProfile: "dynamicvram-offload-v1",
+      measuredDiskFootprintGb: 0.0000045,
       minFreeDiskGb: 50
     })
   });
@@ -1947,6 +2093,88 @@ describe("certify CLI", () => {
       );
 
       expect(exitCode).toBe(0);
+      expect(writeCertificationArtifacts).toHaveBeenCalled();
+    });
+
+    it("executes certification run for MiniMax-H3 Ref2V Turbo4 profile and passes steps=4 identity", async () => {
+      const stdout = vi.fn();
+      const stderr = vi.fn();
+
+      const turbo4Artifact: CertificationArtifact = {
+        ...mockPassedArtifact,
+        runId: "minimax-ref2v-turbo-cert-run-001",
+        identity: {
+          profileId: "minimax-h3-720p-124f-ref2v-turbo4",
+          renderProfileKey: "MINIMAX_H3_720P_5S_REF2V_TURBO4_V1",
+          renderProfileVersion: 1,
+          engine: "minimax_h3_ref2v",
+          width: 1344,
+          height: 768,
+          frames: 124,
+          steps: 4,
+          workflowSha256: "d".repeat(64),
+          modelSha256: {
+            "clip/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors": "4".repeat(64),
+            "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors": "5".repeat(64),
+            "vae/minimax_h3_audio_vae_fp32.safetensors": "6".repeat(64),
+            "vae/minimax_h3_video_vae_int8_convrot.safetensors": "7".repeat(64),
+            "loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors": "8".repeat(64)
+          },
+          comfyUiCommit: "d".repeat(40),
+          customNodes: []
+        }
+      };
+
+      const writeCertificationArtifacts = vi.fn().mockResolvedValue({
+        runId: "minimax-ref2v-turbo-cert-run-001",
+        outputDirectory: "/test/certification/minimax-h3/minimax-ref2v-turbo-cert-run-001",
+        resultJsonPath:
+          "/test/certification/minimax-h3/minimax-ref2v-turbo-cert-run-001/result.json",
+        summaryMdPath: "/test/certification/minimax-h3/minimax-ref2v-turbo-cert-run-001/summary.md",
+        relativeOutputDirectory: "certification/minimax-h3/minimax-ref2v-turbo-cert-run-001",
+        relativeResultJsonPath:
+          "certification/minimax-h3/minimax-ref2v-turbo-cert-run-001/result.json",
+        relativeSummaryMdPath:
+          "certification/minimax-h3/minimax-ref2v-turbo-cert-run-001/summary.md",
+        artifact: turbo4Artifact
+      });
+
+      const runCertification = vi.fn().mockResolvedValue(turbo4Artifact);
+
+      const deps = createStandardDependencies({
+        loadCertificationProfile: vi.fn().mockResolvedValue(mockMinimaxRef2vTurbo4Profile),
+        readApprovedProvenance: vi.fn().mockResolvedValue(mockApprovedRef2vTurbo4Provenance),
+        collectCertificationProvenance: vi
+          .fn()
+          .mockResolvedValue(mockApprovedRef2vTurbo4Provenance),
+        verifyGoldMasterProvenance,
+        readWorkflowFile: vi
+          .fn()
+          .mockResolvedValue(JSON.stringify({ "9": { inputs: { steps: 4 } } })),
+        runCertification,
+        writeCertificationArtifacts
+      });
+
+      const exitCode = await runCertificationCli(
+        [
+          "--comfyui-dir=/comfy",
+          "--comfyui-url=http://127.0.0.1:8188",
+          "--comfyui-pid=12345",
+          "--gold-master-provenance=/gold.json",
+          "--profile=minimax-h3-720p-124f-ref2v-turbo4",
+          "--run-id=minimax-ref2v-turbo-cert-run-001"
+        ],
+        { stdout, stderr },
+        deps
+      );
+
+      expect(exitCode).toBe(0);
+      expect(runCertification).toHaveBeenCalled();
+      const calledIdentity = runCertification.mock.calls[0]![0].identity;
+      expect(calledIdentity.profileId).toBe("minimax-h3-720p-124f-ref2v-turbo4");
+      expect(calledIdentity.renderProfileKey).toBe("MINIMAX_H3_720P_5S_REF2V_TURBO4_V1");
+      expect(calledIdentity.steps).toBe(4);
+      expect(calledIdentity.frames).toBe(124);
       expect(writeCertificationArtifacts).toHaveBeenCalled();
     });
   });
