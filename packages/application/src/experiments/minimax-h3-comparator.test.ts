@@ -389,7 +389,7 @@ function createCompletedResultV2(
     ...restOverrides,
     observedProvenance: {
       ...tpl.observedProvenance,
-      ...(descriptor.attentionRequest
+      ...(descriptor.attentionRequest || descriptor.teacacheRequest
         ? {
             actualCheckpointHash: {
               status: "verified" as const,
@@ -474,7 +474,16 @@ function createCompletedResultV2(
                 cudaBuildVersion: descriptor.requiredRuntime?.cudaBuild ?? "12.4",
                 cudaRuntimeVersion: "12.4",
                 pythonVersion: "3.11.9"
-              }
+              },
+              ...(descriptor.teacacheRequest
+                ? {
+                    teacacheAdapterIdentity: {
+                      verified: true,
+                      packageDir: "/opt/comfyui/custom_nodes/cco-minimax-h3-teacache",
+                      observedDigest: descriptor.teacacheRequest.adapterDigest
+                    }
+                  }
+                : {})
             },
             attentionIdentity: {
               identityVersion: 1 as const,
@@ -596,6 +605,16 @@ function createCompletedResultV2(
     }
   };
 }
+
+const OFF_CONTROL_EFFECTIVE_CONFIG = {
+  mode: "off" as const,
+  relL1Thresh: 0.15,
+  startStep: 2,
+  endStep: 18,
+  totalSteps: 20 as const,
+  normalizedStartStep: 2,
+  normalizedEndStep: 18
+};
 
 describe("MinimaxH3Comparator", () => {
   it("admits identical controlled runs with perfect ratio 1.0", () => {
@@ -4130,7 +4149,7 @@ describe("Service-generated Matched Pairs Admission and Comparison", () => {
           status: "verified",
           mode: "off",
           requestedConfig: null,
-          effectiveConfig: null,
+          effectiveConfig: OFF_CONTROL_EFFECTIVE_CONFIG,
           totalSteps: 20,
           forwardCallsRecorded: 20,
           cacheHitsRecorded: 0,
@@ -4215,6 +4234,190 @@ describe("Service-generated Matched Pairs Admission and Comparison", () => {
       expect(report.metrics?.wallTimeRatio).toBeCloseTo(280000 / 420000, 2);
     });
 
+    describe("substrate / adapter-identity parity (F-b198895c)", () => {
+      const buildPair = async (tag: string) => {
+        const service = setupServiceWithTemplates();
+        const common = {
+          route: "i2v" as const,
+          frames: 124 as const,
+          seed: 42,
+          prompt: "A cinematic shot of a sunset over the ocean",
+          operatorLabel: "operator",
+          outputRoot: ".ai-runs/minimax-h3-experiments",
+          targetHost: "render-worker-01",
+          gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+          comfyUiDir: "/opt/comfyui",
+          pythonPath: "/usr/bin/python3",
+          inputManifestPath: "manifest-i2v.json"
+        };
+        const { descriptor: baseDesc } = await service.prepareExperiment({
+          ...common,
+          runId: `${tag}-base`,
+          teacacheMatchedControl: true
+        });
+        const { descriptor: varDesc } = await service.prepareExperiment({
+          ...common,
+          runId: `${tag}-var`,
+          teacache: "raw-l1-v1",
+          teacacheThreshold: 0.15,
+          teacacheStartStep: 2,
+          teacacheEndStep: -2,
+          teacacheTotalSteps: 20
+        });
+        const baseObs = {
+          status: "verified" as const,
+          mode: "off" as const,
+          requestedConfig: null,
+          effectiveConfig: OFF_CONTROL_EFFECTIVE_CONFIG,
+          totalSteps: 20,
+          forwardCallsRecorded: 20,
+          cacheHitsRecorded: 0,
+          nestedForwardsOnHits: 0,
+          coverage: { samplingCallsRecorded: 1, modelForwardsRecorded: 20, complete: true },
+          timings: {
+            samplingWallMs: 380000,
+            modelForwardElapsedMs: 350000,
+            decisionOverheadMs: 0,
+            timingUnavailableReason: null
+          },
+          failureReason: null
+        };
+        const cfg = {
+          mode: "raw-l1-v1" as const,
+          relL1Thresh: 0.15,
+          startStep: 2,
+          endStep: -2,
+          totalSteps: 20,
+          normalizedStartStep: 2,
+          normalizedEndStep: 18
+        };
+        const varObs = {
+          ...baseObs,
+          mode: "raw-l1-v1" as const,
+          requestedConfig: cfg,
+          effectiveConfig: cfg,
+          forwardCallsRecorded: 14,
+          cacheHitsRecorded: 6,
+          coverage: { samplingCallsRecorded: 1, modelForwardsRecorded: 14, complete: true },
+          timings: {
+            samplingWallMs: 240000,
+            modelForwardElapsedMs: 220000,
+            decisionOverheadMs: 15,
+            timingUnavailableReason: null
+          }
+        };
+        const mk = (d: unknown, obs: unknown, overrideProv?: Record<string, unknown>) =>
+          createCompletedResultV2(
+            d as MinimaxH3ExperimentDescriptorV2,
+            {
+              teacacheObservation: obs,
+              ...(overrideProv ? { __prov: overrideProv } : {})
+            } as never
+          );
+        return { baseDesc, varDesc, baseObs, varObs, mk };
+      };
+      const run = (
+        bd: unknown,
+        br: unknown,
+        vd: unknown,
+        vr: unknown
+      ): ReturnType<typeof compareMinimaxH3Experiments> =>
+        compareMinimaxH3Experiments({
+          baselineDescriptor: bd as MinimaxH3ExperimentDescriptorV2,
+          baselineResult: br as MinimaxH3ExperimentResultV2,
+          variantDescriptor: vd as MinimaxH3ExperimentDescriptorV2,
+          variantResult: vr as MinimaxH3ExperimentResultV2
+        });
+      type ProvRecord = Record<string, Record<string, unknown> | undefined>;
+      const mutateProv = (result: unknown, fn: (prov: ProvRecord) => void) => {
+        const r = structuredClone(result) as { observedProvenance: ProvRecord };
+        fn(r.observedProvenance);
+        return r;
+      };
+
+      it("admits a fully evidenced pair (sanity)", async () => {
+        const { baseDesc, varDesc, baseObs, varObs, mk } = await buildPair("par-ok");
+        const report = run(baseDesc, mk(baseDesc, baseObs), varDesc, mk(varDesc, varObs));
+        expect(report.structuralAdmission.eligible).toBe(true);
+        expect(report.metrics).not.toBeNull();
+      });
+
+      it.each([
+        ["missing capabilityHandshake", (p: ProvRecord) => delete p.capabilityHandshake],
+        ["missing observedSampling", (p: ProvRecord) => delete p.observedSampling],
+        ["missing observedConditioning", (p: ProvRecord) => delete p.observedConditioning],
+        [
+          "mismatched pytorchVersion",
+          (p: ProvRecord) => (p.runtimeVersions!.pytorchVersion = "9.9.9")
+        ],
+        [
+          "unknown comfyuiCoreRevision",
+          (p: ProvRecord) => (p.comfyuiCoreRevision = { status: "unknown", value: null })
+        ],
+        [
+          "missing bootstrapHandshake",
+          (p: ProvRecord) => (p.bootstrapHandshake = { status: "missing" })
+        ]
+      ])("disqualifies a pair whose baseline has %s", async (_name, fn) => {
+        const { baseDesc, varDesc, baseObs, varObs, mk } = await buildPair("par-sub");
+        const baseRes = mutateProv(mk(baseDesc, baseObs), fn);
+        const report = run(baseDesc, baseRes, varDesc, mk(varDesc, varObs));
+        expect(report.structuralAdmission.eligible).toBe(false);
+        expect(report.metrics).toBeNull();
+      });
+
+      it("disqualifies a pair whose loaded adapter digest differs from the declared digest", async () => {
+        const { baseDesc, varDesc, baseObs, varObs, mk } = await buildPair("par-loaded");
+        const varRes = mutateProv(mk(varDesc, varObs), (p) => {
+          (
+            p.capabilityHandshake!.teacacheAdapterIdentity as Record<string, unknown>
+          ).observedDigest = "f".repeat(64);
+        });
+        const report = run(baseDesc, mk(baseDesc, baseObs), varDesc, varRes);
+        expect(report.structuralAdmission.eligible).toBe(false);
+        expect(report.metrics).toBeNull();
+      });
+
+      it.each(["adapterDigest", "upstreamCommit", "adapterVersion"] as const)(
+        "disqualifies a pair whose declared teacacheRequest.%s differs",
+        async (field) => {
+          const { baseDesc, varDesc, baseObs, varObs, mk } = await buildPair("par-decl");
+          const tamperedBase = structuredClone(baseDesc) as MinimaxH3ExperimentDescriptorV2;
+          (tamperedBase.teacacheRequest as Record<string, unknown>)[field] =
+            field === "adapterDigest" ? "e".repeat(64) : "tampered";
+          const report = run(tamperedBase, mk(tamperedBase, baseObs), varDesc, mk(varDesc, varObs));
+          expect(report.structuralAdmission.eligible).toBe(false);
+          expect(report.metrics).toBeNull();
+        }
+      );
+
+      it("does not synthesize a default matched control when baseline teacacheRequest is absent", async () => {
+        const { baseDesc, varDesc, baseObs, varObs, mk } = await buildPair("par-nobase");
+        const stripped = structuredClone(baseDesc) as MinimaxH3ExperimentDescriptorV2;
+        delete (stripped as { teacacheRequest?: unknown }).teacacheRequest;
+        const report = run(stripped, mk(stripped, baseObs), varDesc, mk(varDesc, varObs));
+        expect(report.structuralAdmission.eligible).toBe(false);
+        expect(report.metrics).toBeNull();
+      });
+
+      it.each([
+        ["null effectiveConfig", null],
+        ["raw-l1-v1 effectiveConfig", { ...OFF_CONTROL_EFFECTIVE_CONFIG, mode: "raw-l1-v1" }],
+        ["wrong totalSteps", { ...OFF_CONTROL_EFFECTIVE_CONFIG, totalSteps: 30 }],
+        ["inconsistent window", { ...OFF_CONTROL_EFFECTIVE_CONFIG, normalizedEndStep: 17 }]
+      ])("disqualifies a control with %s", async (_name, effectiveConfig) => {
+        const { baseDesc, varDesc, baseObs, varObs, mk } = await buildPair("par-cfg");
+        const report = run(
+          baseDesc,
+          mk(baseDesc, { ...baseObs, effectiveConfig }),
+          varDesc,
+          mk(varDesc, varObs)
+        );
+        expect(report.metricEligibility.samplingWallEligible).toBe(false);
+        expect(report.metrics).toBeNull();
+      });
+    });
+
     it("disqualifies speedup metrics when TeaCache observation status is no_op (0 cache hits)", async () => {
       const service = setupServiceWithTemplates();
       const prompt = "A cinematic shot of a sunset over the ocean";
@@ -4260,7 +4463,7 @@ describe("Service-generated Matched Pairs Admission and Comparison", () => {
           status: "verified",
           mode: "off",
           requestedConfig: null,
-          effectiveConfig: null,
+          effectiveConfig: OFF_CONTROL_EFFECTIVE_CONFIG,
           totalSteps: 20,
           forwardCallsRecorded: 20,
           cacheHitsRecorded: 0,
@@ -4361,7 +4564,7 @@ describe("Service-generated Matched Pairs Admission and Comparison", () => {
           status: "verified",
           mode: "off",
           requestedConfig: null,
-          effectiveConfig: null,
+          effectiveConfig: OFF_CONTROL_EFFECTIVE_CONFIG,
           totalSteps: 20,
           forwardCallsRecorded: 20,
           cacheHitsRecorded: 0,
@@ -4480,7 +4683,7 @@ describe("Service-generated Matched Pairs Admission and Comparison", () => {
           status: "verified",
           mode: "off",
           requestedConfig: null,
-          effectiveConfig: null,
+          effectiveConfig: OFF_CONTROL_EFFECTIVE_CONFIG,
           totalSteps: 20,
           forwardCallsRecorded: 20,
           cacheHitsRecorded: 0,
@@ -4679,7 +4882,7 @@ describe("Service-generated Matched Pairs Admission and Comparison", () => {
           status: "verified",
           mode: "off",
           requestedConfig: null,
-          effectiveConfig: null,
+          effectiveConfig: OFF_CONTROL_EFFECTIVE_CONFIG,
           totalSteps: 20,
           forwardCallsRecorded: 20,
           cacheHitsRecorded: 0,
@@ -4801,7 +5004,7 @@ describe("Service-generated Matched Pairs Admission and Comparison", () => {
           status: "verified",
           mode: "off",
           requestedConfig: null,
-          effectiveConfig: null,
+          effectiveConfig: OFF_CONTROL_EFFECTIVE_CONFIG,
           totalSteps: 20,
           forwardCallsRecorded: 20,
           cacheHitsRecorded: 0,
@@ -4935,7 +5138,7 @@ describe("Service-generated Matched Pairs Admission and Comparison", () => {
           status: "verified",
           mode: "off",
           requestedConfig: null,
-          effectiveConfig: null,
+          effectiveConfig: OFF_CONTROL_EFFECTIVE_CONFIG,
           totalSteps: 20,
           forwardCallsRecorded: 20,
           cacheHitsRecorded: 0,
@@ -5059,7 +5262,7 @@ describe("Service-generated Matched Pairs Admission and Comparison", () => {
           status: "verified",
           mode: "off",
           requestedConfig: null,
-          effectiveConfig: null,
+          effectiveConfig: OFF_CONTROL_EFFECTIVE_CONFIG,
           totalSteps: 20,
           forwardCallsRecorded: 20,
           cacheHitsRecorded: 0,
@@ -5189,7 +5392,7 @@ describe("Service-generated Matched Pairs Admission and Comparison", () => {
           status: "verified",
           mode: "off",
           requestedConfig: null,
-          effectiveConfig: null,
+          effectiveConfig: OFF_CONTROL_EFFECTIVE_CONFIG,
           totalSteps: 20,
           forwardCallsRecorded: 20,
           cacheHitsRecorded: 0,
