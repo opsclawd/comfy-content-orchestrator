@@ -245,7 +245,7 @@ function evaluateAttentionObservationEligibility(params: {
   };
 }
 
-function evaluateTeaCacheObservationEligibility(params: {
+export function evaluateTeaCacheObservationEligibility(params: {
   role: "Baseline" | "Variant";
   observation: MinimaxH3TeaCacheObservation | undefined | null;
   mode: MinimaxH3TeaCacheMode;
@@ -297,6 +297,37 @@ function evaluateTeaCacheObservationEligibility(params: {
       reasons.push(
         `${role} control modelForwardsRecorded (${obs.coverage.modelForwardsRecorded}) !== 20.`
       );
+    }
+    const ctrlCfg = obs.effectiveConfig;
+    if (!ctrlCfg) {
+      reasons.push(`${role} control effectiveConfig is missing or null.`);
+    } else {
+      if (ctrlCfg.mode !== "off") {
+        reasons.push(`${role} control effectiveConfig mode "${ctrlCfg.mode}" !== "off".`);
+      }
+      if (ctrlCfg.totalSteps !== 20) {
+        reasons.push(`${role} control effectiveConfig totalSteps ${ctrlCfg.totalSteps} !== 20.`);
+      }
+      const derivedEnd =
+        ctrlCfg.endStep < 0 ? ctrlCfg.totalSteps + ctrlCfg.endStep : ctrlCfg.endStep;
+      if (
+        !Number.isInteger(ctrlCfg.startStep) ||
+        ctrlCfg.startStep < 0 ||
+        !Number.isInteger(ctrlCfg.endStep) ||
+        ctrlCfg.normalizedStartStep !== ctrlCfg.startStep ||
+        ctrlCfg.normalizedEndStep !== derivedEnd
+      ) {
+        reasons.push(`${role} control effectiveConfig step window is internally inconsistent.`);
+      }
+    }
+    if (obs.requestedConfig && obs.requestedConfig.mode !== "off") {
+      reasons.push(`${role} control requestedConfig mode "${obs.requestedConfig.mode}" !== "off".`);
+    }
+    if (obs.totalSteps !== 20) {
+      reasons.push(`${role} control totalSteps ${obs.totalSteps} !== 20.`);
+    }
+    if (obs.forwardCallsRecorded !== 20) {
+      reasons.push(`${role} control forwardCallsRecorded ${obs.forwardCallsRecorded} !== 20.`);
     }
     return {
       valid: reasons.length === 0,
@@ -1033,8 +1064,18 @@ export function compareMinimaxH3Experiments(
     } else if (factor.path === "caching.configuration") {
       const baseReq = baselineDescV2.teacacheRequest;
       const varReq = variantDescV2.teacacheRequest;
-      const baseMode = baseReq?.mode ?? "off";
-      const varMode = varReq?.mode ?? "off";
+      if (!baseReq) {
+        admissionReasons.push(
+          `Declared factor "caching.configuration" requires the baseline to carry an explicit teacacheRequest (matched control).`
+        );
+      }
+      if (!varReq) {
+        admissionReasons.push(
+          `Declared factor "caching.configuration" requires the variant to carry an explicit teacacheRequest.`
+        );
+      }
+      const baseMode = baseReq?.mode;
+      const varMode = varReq?.mode;
       const beforeObj = factor.before as {
         mode?: string;
         threshold?: number | null;
@@ -1204,13 +1245,68 @@ export function compareMinimaxH3Experiments(
     variantDescV2?.attentionRequest
   );
 
-  if (isAttentionComparison) {
-    if (!baselineDescV2.attentionRequest) {
+  // TeaCache pairs must clear the same observed-substrate / loaded-identity
+  // gate as attention pairs (F-b198895c): one shared, strict check.
+  const isTeaCacheComparison = Boolean(
+    baselineDescV2?.teacacheRequest ||
+    variantDescV2?.teacacheRequest ||
+    declaredPaths.includes("caching.configuration") ||
+    baselineDescV2?.compatibility?.scope?.includes("teacache") ||
+    variantDescV2?.compatibility?.scope?.includes("teacache")
+  );
+
+  if (isTeaCacheComparison) {
+    const baseTc = baselineDescV2?.teacacheRequest;
+    const varTc = variantDescV2?.teacacheRequest;
+    if (!baseTc) {
+      admissionReasons.push(
+        'TeaCache comparison requires the baseline to carry an explicit teacacheRequest with mode "off" (matched control); no default is synthesized.'
+      );
+    } else if (baseTc.mode !== "off") {
+      admissionReasons.push(
+        `TeaCache comparison requires baseline teacacheRequest.mode "off" but found "${baseTc.mode}".`
+      );
+    }
+    if (!varTc) {
+      admissionReasons.push("TeaCache comparison requires the variant to carry a teacacheRequest.");
+    } else if (varTc.mode !== "raw-l1-v1") {
+      admissionReasons.push(
+        `TeaCache comparison requires variant teacacheRequest.mode "raw-l1-v1" but found "${varTc.mode}".`
+      );
+    }
+    if (baseTc && varTc) {
+      if (baseTc.adapterDigest !== varTc.adapterDigest) {
+        admissionReasons.push(
+          `TeaCache adapter digest mismatch across pair: baseline is "${baseTc.adapterDigest}", variant is "${varTc.adapterDigest}".`
+        );
+      }
+      if (baseTc.upstreamCommit !== varTc.upstreamCommit) {
+        admissionReasons.push(
+          `TeaCache upstream commit mismatch across pair: baseline is "${baseTc.upstreamCommit}", variant is "${varTc.upstreamCommit}".`
+        );
+      }
+      if (baseTc.adapterVersion !== varTc.adapterVersion) {
+        admissionReasons.push(
+          `TeaCache adapter version mismatch across pair: baseline is "${baseTc.adapterVersion}", variant is "${varTc.adapterVersion}".`
+        );
+      }
+    }
+    const tcBaseCore = baselineDescV2?.requiredRuntime?.coreRevision;
+    const tcVarCore = variantDescV2?.requiredRuntime?.coreRevision;
+    if (!tcBaseCore || !tcVarCore || tcBaseCore !== tcVarCore) {
+      admissionReasons.push(
+        `Core revision mismatch across TeaCache comparison pair: baseline is "${tcBaseCore}", variant is "${tcVarCore}".`
+      );
+    }
+  }
+
+  if (isAttentionComparison || isTeaCacheComparison) {
+    if (isAttentionComparison && !baselineDescV2.attentionRequest) {
       admissionReasons.push(
         "Attention comparison requires baseline to specify an attentionRequest."
       );
     }
-    if (!variantDescV2.attentionRequest) {
+    if (isAttentionComparison && !variantDescV2.attentionRequest) {
       admissionReasons.push(
         "Attention comparison requires variant to specify an attentionRequest."
       );
@@ -1361,6 +1457,40 @@ export function compareMinimaxH3Experiments(
         }
         if (!prov.runtimeVersions?.pythonVersion) {
           admissionReasons.push(`${role} Python version is unverified/null.`);
+        }
+        if (!prov.runtimeVersions?.pytorchVersion) {
+          admissionReasons.push(`${role} PyTorch version is unverified/null.`);
+        }
+
+        // Observed sampling / conditioning must be verified and match the descriptor
+        const obsSampling = prov.observedSampling;
+        if (!obsSampling || obsSampling.status !== "verified") {
+          admissionReasons.push(
+            `${role} observed sampling status is ${obsSampling?.status ?? "missing"} (expected verified).`
+          );
+        }
+        const obsCond = prov.observedConditioning;
+        if (!obsCond || obsCond.status !== "verified") {
+          admissionReasons.push(
+            `${role} observed conditioning status is ${obsCond?.status ?? "missing"} (expected verified).`
+          );
+        }
+
+        // Declared TeaCache adapter identity must be what was actually loaded
+        if (desc?.teacacheRequest) {
+          const tcId = prov.capabilityHandshake?.teacacheAdapterIdentity;
+          if (!tcId || tcId.verified !== true) {
+            admissionReasons.push(
+              `${role} capability handshake lacks a verified TeaCache adapter identity.`
+            );
+          } else if (
+            (tcId as { observedDigest?: string }).observedDigest !==
+            desc.teacacheRequest.adapterDigest
+          ) {
+            admissionReasons.push(
+              `${role} loaded TeaCache adapter digest does not match declared adapterDigest.`
+            );
+          }
         }
 
         // Check bootstrap handshake
@@ -1643,6 +1773,52 @@ export function compareMinimaxH3Experiments(
         );
       }
       if (
+        baselineProv.runtimeVersions?.pytorchVersion !== variantProv.runtimeVersions?.pytorchVersion
+      ) {
+        admissionReasons.push(
+          `PyTorch version mismatch: baseline is "${baselineProv.runtimeVersions?.pytorchVersion}", variant is "${variantProv.runtimeVersions?.pytorchVersion}".`
+        );
+      }
+      if (
+        isTeaCacheComparison &&
+        (
+          baselineProv.capabilityHandshake?.teacacheAdapterIdentity as
+            { observedDigest?: string } | null | undefined
+        )?.observedDigest !==
+          (
+            variantProv.capabilityHandshake?.teacacheAdapterIdentity as
+              { observedDigest?: string } | null | undefined
+          )?.observedDigest
+      ) {
+        admissionReasons.push("Loaded TeaCache adapter digest mismatch across pair.");
+      }
+      {
+        const bc = baselineProv.observedConditioning;
+        const vc = variantProv.observedConditioning;
+        if (
+          bc &&
+          vc &&
+          (bc.nodeClass !== vc.nodeClass ||
+            bc.taskMode !== vc.taskMode ||
+            bc.referenceCount !== vc.referenceCount)
+        ) {
+          admissionReasons.push("Observed conditioning mismatch across pair.");
+        }
+        const bs = baselineProv.observedSampling;
+        const vs = variantProv.observedSampling;
+        if (
+          bs &&
+          vs &&
+          !declaredPaths.includes("sampling.settings") &&
+          (bs.completedSteps !== vs.completedSteps ||
+            bs.expectedSteps !== vs.expectedSteps ||
+            bs.samplerName !== vs.samplerName ||
+            bs.schedulerName !== vs.schedulerName)
+        ) {
+          admissionReasons.push("Observed sampling mismatch across pair.");
+        }
+      }
+      if (
         baselineProv.actualCheckpointHash?.value &&
         variantProv.actualCheckpointHash?.value &&
         baselineProv.actualCheckpointHash.value !== variantProv.actualCheckpointHash.value
@@ -1680,51 +1856,53 @@ export function compareMinimaxH3Experiments(
     }
 
     // Dense region policy: baseline purity and kernel failure guards
-    const baseAttnObs = (baselineResult as Partial<MinimaxH3ExperimentResultV2>)
-      ?.attentionObservation;
-    if (!baseAttnObs) {
-      admissionReasons.push(
-        "Baseline experiment is missing attention observation required for attention comparison."
-      );
-    } else {
-      if (baseAttnObs.missingKernelFailure) {
+    if (isAttentionComparison) {
+      const baseAttnObs = (baselineResult as Partial<MinimaxH3ExperimentResultV2>)
+        ?.attentionObservation;
+      if (!baseAttnObs) {
         admissionReasons.push(
-          `Baseline recorded missing kernel failure: ${baseAttnObs.missingKernelFailure}. Attention comparison rejected.`
+          "Baseline experiment is missing attention observation required for attention comparison."
         );
+      } else {
+        if (baseAttnObs.missingKernelFailure) {
+          admissionReasons.push(
+            `Baseline recorded missing kernel failure: ${baseAttnObs.missingKernelFailure}. Attention comparison rejected.`
+          );
+        }
+        if (baseAttnObs.status === "failed") {
+          admissionReasons.push(
+            `Baseline recorded attention failure: ${baseAttnObs.failureReason ?? "unknown"}. Attention comparison rejected.`
+          );
+        }
+        if (baseAttnObs.acceleratedCallCount > 0) {
+          admissionReasons.push(
+            `Baseline observed mixed accelerated execution (${baseAttnObs.acceleratedCallCount} accelerated call(s)). Dense baseline must be pure. Attention comparison rejected.`
+          );
+        }
+        if (baseAttnObs.fallbackEvents && baseAttnObs.fallbackEvents.length > 0) {
+          admissionReasons.push(
+            `Baseline experienced attention fallback (${baseAttnObs.fallbackEvents.length} fallback event(s)). Attention comparison rejected.`
+          );
+        }
       }
-      if (baseAttnObs.status === "failed") {
-        admissionReasons.push(
-          `Baseline recorded attention failure: ${baseAttnObs.failureReason ?? "unknown"}. Attention comparison rejected.`
-        );
-      }
-      if (baseAttnObs.acceleratedCallCount > 0) {
-        admissionReasons.push(
-          `Baseline observed mixed accelerated execution (${baseAttnObs.acceleratedCallCount} accelerated call(s)). Dense baseline must be pure. Attention comparison rejected.`
-        );
-      }
-      if (baseAttnObs.fallbackEvents && baseAttnObs.fallbackEvents.length > 0) {
-        admissionReasons.push(
-          `Baseline experienced attention fallback (${baseAttnObs.fallbackEvents.length} fallback event(s)). Attention comparison rejected.`
-        );
-      }
-    }
 
-    const varAttnObs = (variantResult as Partial<MinimaxH3ExperimentResultV2>)
-      ?.attentionObservation;
-    if (!varAttnObs) {
-      admissionReasons.push(
-        "Variant experiment is missing attention observation required for attention comparison."
-      );
-    } else {
-      if (varAttnObs.missingKernelFailure) {
+      const varAttnObs = (variantResult as Partial<MinimaxH3ExperimentResultV2>)
+        ?.attentionObservation;
+      if (!varAttnObs) {
         admissionReasons.push(
-          `Variant recorded missing kernel failure: ${varAttnObs.missingKernelFailure}. Attention comparison rejected.`
+          "Variant experiment is missing attention observation required for attention comparison."
         );
-      }
-      if (varAttnObs.status === "failed") {
-        admissionReasons.push(
-          `Variant recorded attention failure: ${varAttnObs.failureReason ?? "unknown"}. Attention comparison rejected.`
-        );
+      } else {
+        if (varAttnObs.missingKernelFailure) {
+          admissionReasons.push(
+            `Variant recorded missing kernel failure: ${varAttnObs.missingKernelFailure}. Attention comparison rejected.`
+          );
+        }
+        if (varAttnObs.status === "failed") {
+          admissionReasons.push(
+            `Variant recorded attention failure: ${varAttnObs.failureReason ?? "unknown"}. Attention comparison rejected.`
+          );
+        }
       }
     }
   } else if (baselineProv && variantProv) {
@@ -1991,11 +2169,6 @@ export function compareMinimaxH3Experiments(
     }
 
     // TeaCache variant verification
-    const isTeaCacheComparison =
-      declaredPaths.includes("caching.configuration") ||
-      Boolean(variantDescV2.teacacheRequest) ||
-      Boolean(baselineDescV2.teacacheRequest);
-
     if (isTeaCacheComparison) {
       const varResV2 = variantResult as Partial<MinimaxH3ExperimentResultV2>;
       const obs = varResV2.teacacheObservation;
@@ -2003,13 +2176,17 @@ export function compareMinimaxH3Experiments(
       const baseObs = baseResV2.teacacheObservation;
       let teacacheValid = true;
 
-      const baseMode = baselineDescV2.teacacheRequest?.mode ?? "off";
-      const baseEval = evaluateTeaCacheObservationEligibility({
-        role: "Baseline",
-        observation: baseObs,
-        mode: baseMode,
-        expectedRequest: baselineDescV2.teacacheRequest
-      });
+      const baseEval = baselineDescV2.teacacheRequest
+        ? evaluateTeaCacheObservationEligibility({
+            role: "Baseline",
+            observation: baseObs,
+            mode: baselineDescV2.teacacheRequest.mode,
+            expectedRequest: baselineDescV2.teacacheRequest
+          })
+        : {
+            valid: false,
+            reasons: ["Baseline lacks an explicit TeaCache matched-control request."]
+          };
       if (!baseEval.valid) {
         for (const r of baseEval.reasons) {
           metricReasons.push(`${r} Speedup metrics disqualified.`);

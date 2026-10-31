@@ -87,6 +87,7 @@ import {
   teaCacheCatalogVariantForMode
 } from "./minimax-h3-teacache-catalog.js";
 import { reduceTeaCacheObservation } from "./minimax-h3-teacache-reducer.js";
+import { evaluateTeaCacheObservationEligibility } from "./minimax-h3-comparator.js";
 import {
   parseAttentionEvidence,
   resolveAttentionEvidence,
@@ -5292,6 +5293,7 @@ export class MinimaxH3ExperimentService {
     const descriptor = validation.descriptor;
     const validatedGraph = validation.validatedGraph;
 
+    let isTeaCacheRun = false;
     if (descriptor.schemaVersion === 2) {
       const descV2 = descriptor as MinimaxH3ExperimentDescriptorV2;
       const isAttentionExperiment =
@@ -5309,9 +5311,24 @@ export class MinimaxH3ExperimentService {
         descV2.compatibility.scope.includes("teacache") ||
         descV2.experimentVariant.changedFactors.some((f) => f.path === "caching.configuration");
       const isTeaCacheMatchedControl = descV2.compatibility.scope.includes("matched-control");
-      if (isTeaCacheExperiment && !isTeaCacheMatchedControl && !descV2.teacacheRequest) {
+      isTeaCacheRun = isTeaCacheExperiment || isTeaCacheMatchedControl;
+      if (isTeaCacheRun && !descV2.teacacheRequest) {
         throw new Error(
           "Execution rejected: TeaCache experiment descriptor lacks required modern teacacheRequest"
+        );
+      }
+      if (isTeaCacheMatchedControl && descV2.teacacheRequest?.mode !== "off") {
+        throw new Error(
+          `Execution rejected: TeaCache matched-control descriptor must carry teacacheRequest.mode "off" (found "${descV2.teacacheRequest?.mode}").`
+        );
+      }
+      if (
+        isTeaCacheExperiment &&
+        !isTeaCacheMatchedControl &&
+        descV2.teacacheRequest?.mode !== "raw-l1-v1"
+      ) {
+        throw new Error(
+          `Execution rejected: TeaCache candidate descriptor must carry teacacheRequest.mode "raw-l1-v1" (found "${descV2.teacacheRequest?.mode}").`
         );
       }
     }
@@ -5325,12 +5342,12 @@ export class MinimaxH3ExperimentService {
     await this.store.writeDurableJson(`${runDir}/stop-policy.json`, stopPolicy);
 
     // 3. Staged escalation rule: candidate frame counts > 124 require a verified baseline run
-    if (descriptor.configuredFrames > 124) {
-      if (!options?.baselineRunDir) {
-        throw new Error(
-          `Candidate frame count ${descriptor.configuredFrames} > 124 requires a successful 124-frame baseline run via --baseline-run-dir before escalating.`
-        );
-      }
+    if (descriptor.configuredFrames > 124 && !options?.baselineRunDir) {
+      throw new Error(
+        `Candidate frame count ${descriptor.configuredFrames} > 124 requires a successful 124-frame baseline run via --baseline-run-dir before escalating.`
+      );
+    }
+    if (options?.baselineRunDir && (descriptor.configuredFrames > 124 || isTeaCacheRun)) {
       const baselineDescriptor = await this.store.readDescriptor(options.baselineRunDir);
       if (baselineDescriptor.configuredFrames !== 124) {
         throw new Error(
@@ -5469,6 +5486,69 @@ export class MinimaxH3ExperimentService {
         throw new Error(
           `Baseline run visual review status is "${baselineVisualStatus}", must be "reviewed".`
         );
+      }
+
+      if (isTeaCacheRun && descriptor.schemaVersion === 2) {
+        const descV2 = descriptor as MinimaxH3ExperimentDescriptorV2;
+        if (baselineDescriptor.schemaVersion !== 2) {
+          throw new Error("TeaCache baseline must be a schemaVersion 2 descriptor.");
+        }
+        const baseReq = baselineDescriptor.teacacheRequest;
+        if (!baseReq || baseReq.mode !== "off") {
+          throw new Error(
+            `TeaCache baseline must carry an explicit teacacheRequest.mode "off" matched control (found ${baseReq ? `"${baseReq.mode}"` : "none"}).`
+          );
+        }
+        const candReq = descV2.teacacheRequest;
+        if (!candReq) {
+          throw new Error("TeaCache run lacks teacacheRequest.");
+        }
+        for (const key of ["adapterDigest", "upstreamCommit", "adapterVersion"] as const) {
+          if (baseReq[key] !== candReq[key]) {
+            throw new Error(
+              `TeaCache baseline ${key} "${baseReq[key]}" does not match this run's "${candReq[key]}".`
+            );
+          }
+        }
+        const baseCore = baselineDescriptor.requiredRuntime?.coreRevision;
+        if (!baseCore || baseCore !== descV2.requiredRuntime?.coreRevision) {
+          throw new Error(
+            `TeaCache baseline coreRevision "${baseCore}" does not match this run's "${descV2.requiredRuntime?.coreRevision}".`
+          );
+        }
+        if (baselineResult.schemaVersion !== 2) {
+          throw new Error("TeaCache baseline result must be a schemaVersion 2 result.");
+        }
+        const obsEval = evaluateTeaCacheObservationEligibility({
+          role: "Baseline",
+          observation: baselineResult.teacacheObservation,
+          mode: "off",
+          expectedRequest: baseReq
+        });
+        if (!obsEval.valid) {
+          throw new Error(
+            `TeaCache baseline observation is not a verified matched control: ${obsEval.reasons.join("; ")}`
+          );
+        }
+        const bp = baselineResult.observedProvenance;
+        const tcId = bp?.capabilityHandshake?.teacacheAdapterIdentity as
+          { verified?: boolean; observedDigest?: string } | null | undefined;
+        if (
+          bp?.capabilityHandshake?.status !== "ok" ||
+          !tcId ||
+          tcId.verified !== true ||
+          tcId.observedDigest !== baseReq.adapterDigest
+        ) {
+          throw new Error(
+            "TeaCache baseline lacks a verified loaded adapter identity matching its declared adapterDigest."
+          );
+        }
+        if (
+          bp.comfyuiCoreRevision?.status !== "verified" ||
+          bp.comfyuiCoreRevision.value !== baseCore
+        ) {
+          throw new Error("TeaCache baseline ComfyUI core revision is not verified/pinned.");
+        }
       }
 
       await this.store.writeDurableJson(`${runDir}/baseline-link.json`, {
